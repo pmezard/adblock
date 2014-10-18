@@ -125,18 +125,18 @@ var (
 func (r *Rule) HasOpts() bool {
 	// Collapse is related to ElemHide, and irrelevant
 	return r.Opts.Document ||
-		// Domains is handled
-		// ElemHide is irrelevant
+		// len(r.Opts.Domains) > 0 // handled
+		// r.Opts.ElemHide // irrelevant
 		r.Opts.Image != nil ||
 		r.Opts.Media != nil ||
-		r.Opts.Object != nil ||
-		r.Opts.ObjectSubRequest != nil ||
+		// r.Opts.Object != nil || // cannot guess request source
+		// r.Opts.ObjectSubRequest != nil || // cannot guess request source
 		r.Opts.Popup != nil ||
-		r.Opts.Script != nil ||
+		// r.Opts.Script != nil || // cannot guess request source
 		r.Opts.Stylesheet != nil ||
-		r.Opts.SubDocument != nil ||
-		r.Opts.ThirdParty != nil ||
-		r.Opts.XmlHttpRequest != nil
+		// r.Opts.SubDocument != nil || // cannot guess request source
+		r.Opts.ThirdParty != nil
+	// r.Opts.XmlHttpRequest != nil // cannot guess request source
 }
 
 func ParseRule(s string) (*Rule, error) {
