@@ -579,3 +579,7 @@ func (m *RuleMatcher) Match(url, domain string) (bool, int) {
 	_, opts = m.excludes.Match(url, domain)
 	return opts == nil, id
 }
+
+func (m *RuleMatcher) String() string {
+	return fmt.Sprintf("excludes:\n%s\nincludes:\n%s\n", m.excludes, m.includes)
+}

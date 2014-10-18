@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"os"
 
@@ -9,17 +10,20 @@ import (
 )
 
 func check() error {
-	if len(os.Args) != 2 {
+	verbose := flag.Bool("v", false, "print rejected rules")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 1 {
 		return fmt.Errorf("one input rule file expected")
 	}
-	fp, err := os.Open(os.Args[1])
+	fp, err := os.Open(args[0])
 	if err != nil {
 		return err
 	}
 	defer fp.Close()
 
 	ok := true
-	rules := []*adblock.Rule{}
+	rules := adblock.NewMatcher()
 	scanner := bufio.NewScanner(fp)
 	for scanner.Scan() {
 		rule, err := adblock.ParseRule(scanner.Text())
@@ -32,16 +36,17 @@ func check() error {
 		if rule == nil {
 			continue
 		}
-		rules = append(rules, rule)
-	}
-	m, err := adblock.NewRuleMatcher(rules)
-	if err != nil {
-		return err
+		err = rules.AddRule(rule, 0)
+		if *verbose && err != nil {
+			fmt.Fprintf(os.Stderr, "error: could not add rule:\n  %s\n  %s\n",
+				scanner.Text(), err)
+			ok = false
+		}
 	}
 	if !ok {
 		return fmt.Errorf("some rules could not be parsed")
 	}
-	fmt.Printf("%s\n", m)
+	fmt.Printf("%s\n", rules)
 	return nil
 }
 
