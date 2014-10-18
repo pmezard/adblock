@@ -3,6 +3,7 @@ package adblock
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"testing"
 )
 
@@ -22,7 +23,11 @@ func testInputs(t *testing.T, rules string, tests []TestInput) {
 	}
 	fmt.Printf("%s\n", m)
 	for _, test := range tests {
-		_, opts := m.Match(test.URL)
+		domain := ""
+		if u, err := url.Parse(test.URL); err == nil {
+			domain = u.Host
+		}
+		_, opts := m.Match(test.URL, domain)
 		res := opts != nil
 		if res && !test.Matched {
 			t.Errorf("unexpected match: '%s'", test.URL)
@@ -109,5 +114,18 @@ func TestDomainAnchor(t *testing.T) {
 			{"http://example.com/redirect/http://ads.example.com/", false},
 			{"https://ads.foo.com/baz.gif", true},
 			{"https://ads.foo.com/baz.png", false},
+		})
+}
+
+func TestOptsDomain(t *testing.T) {
+	testInputs(t, `
+/ads$domain=foo.com|~info.foo.com
+`,
+		[]TestInput{
+			{"http://foo.com/ads", true},
+			{"http://other.foo.com/ads", true},
+			{"http://info.foo.com/ads", false},
+			{"http://foo.com/img", false},
+			{"http://other.com/ads", false},
 		})
 }

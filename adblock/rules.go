@@ -44,6 +44,7 @@ type RulePart struct {
 }
 
 type RuleOpts struct {
+	Raw              string
 	Collapse         *bool
 	Document         bool
 	Domains          []string
@@ -61,7 +62,7 @@ type RuleOpts struct {
 }
 
 func NewRuleOpts(s string) (RuleOpts, error) {
-	opts := RuleOpts{}
+	opts := RuleOpts{Raw: s}
 	for _, opt := range strings.Split(s, ",") {
 		opt = strings.TrimSpace(opt)
 		value := true
@@ -124,7 +125,7 @@ var (
 func (r *Rule) HasOpts() bool {
 	// Collapse is related to ElemHide, and irrelevant
 	return r.Opts.Document ||
-		len(r.Opts.Domains) > 0 ||
+		// Domains is handled
 		// ElemHide is irrelevant
 		r.Opts.Image != nil ||
 		r.Opts.Media != nil ||
@@ -158,8 +159,9 @@ func ParseRule(s string) (*Rule, error) {
 		s = s[2:]
 	}
 	if pos := strings.LastIndex(s, "$"); pos >= 0 {
+		optsStr := s[pos+1:]
 		// Parse the options later
-		opts, err := NewRuleOpts(s[pos+1:])
+		opts, err := NewRuleOpts(optsStr)
 		if err != nil {
 			return nil, err
 		}
@@ -261,13 +263,38 @@ var (
 	reSeparator = regexp.MustCompile(`^(?:[^\w\d_\-\.%]|$)`)
 )
 
-func (n *RuleNode) matchChildren(url []byte) (int, []*RuleOpts) {
+func matchOptsDomains(opts *RuleOpts, domain string) bool {
+	if len(opts.Domains) == 0 {
+		return true
+	}
+	accept := false
+	for _, d := range opts.Domains {
+		reject := strings.HasPrefix(d, "~")
+		if reject {
+			d = d[1:]
+		}
+		if domain == d || strings.HasSuffix(domain, "."+d) {
+			if reject {
+				return false
+			}
+			accept = true
+		}
+	}
+	return accept
+}
+
+func (n *RuleNode) matchChildren(url []byte, domain string) (int, []*RuleOpts) {
 	if len(url) == 0 && len(n.Children) == 0 {
+		for _, opt := range n.Opts {
+			if !matchOptsDomains(opt, domain) {
+				return 0, nil
+			}
+		}
 		return n.RuleId, n.Opts
 	}
 	// If there are children they have to match
 	for _, c := range n.Children {
-		ruleId, opts := c.Match(url)
+		ruleId, opts := c.Match(url, domain)
 		if opts != nil {
 			return ruleId, opts
 		}
@@ -326,7 +353,7 @@ Port:
 	return nil, false
 }
 
-func (n *RuleNode) Match(url []byte) (int, []*RuleOpts) {
+func (n *RuleNode) Match(url []byte, domain string) (int, []*RuleOpts) {
 	for {
 		//fmt.Printf("matching '%s' with %s[%s][final:%v]\n",
 		//	string(url), getPartName(n.Type), string(n.Value), n.Opts != nil)
@@ -336,24 +363,24 @@ func (n *RuleNode) Match(url []byte) (int, []*RuleOpts) {
 				return 0, nil
 			}
 			url = url[len(n.Value):]
-			return n.matchChildren(url)
+			return n.matchChildren(url, domain)
 		case Separator:
 			m := reSeparator.FindSubmatch(url)
 			if m == nil {
 				return 0, nil
 			}
 			url = url[len(m[0]):]
-			return n.matchChildren(url)
+			return n.matchChildren(url, domain)
 		case Wildcard:
 			if len(n.Children) == 0 {
 				// Fast-path trailing wildcards
-				return n.RuleId, n.Opts
+				return n.matchChildren(nil, domain)
 			}
 			if len(url) == 0 {
-				return n.matchChildren(url)
+				return n.matchChildren(url, domain)
 			}
 			for i := 0; i < len(url); i++ {
-				ruleId, opts := n.matchChildren(url[i:])
+				ruleId, opts := n.matchChildren(url[i:], domain)
 				if opts != nil {
 					return ruleId, opts
 				}
@@ -361,10 +388,10 @@ func (n *RuleNode) Match(url []byte) (int, []*RuleOpts) {
 		case DomainAnchor:
 			remaining, ok := matchDomainAnchor(url, n.Value)
 			if ok {
-				return n.matchChildren(remaining)
+				return n.matchChildren(remaining, domain)
 			}
 		case Root:
-			return n.matchChildren(url)
+			return n.matchChildren(url, domain)
 		}
 		return 0, nil
 	}
@@ -482,8 +509,8 @@ func (t *RuleTree) AddRule(rule *Rule, ruleId int) error {
 	return t.root.AddRule(parts, &rule.Opts, ruleId)
 }
 
-func (t *RuleTree) Match(url string) (int, []*RuleOpts) {
-	return t.root.Match([]byte(url))
+func (t *RuleTree) Match(url, domain string) (int, []*RuleOpts) {
+	return t.root.Match([]byte(url), domain)
 }
 
 func (t *RuleTree) String() string {
@@ -497,6 +524,11 @@ func (t *RuleTree) String() string {
 			w.WriteString("[")
 			w.WriteString(string(n.Value))
 			w.WriteString("]")
+		}
+		if len(n.Opts) > 0 {
+			for _, opt := range n.Opts {
+				fmt.Fprintf(w, "[%s]", opt.Raw)
+			}
 		}
 		w.WriteString("\n")
 		for _, c := range n.Children {
@@ -540,10 +572,10 @@ func (m *RuleMatcher) AddRule(rule *Rule, ruleId int) error {
 }
 
 func (m *RuleMatcher) Match(url, domain string) (bool, int) {
-	id, opts := m.includes.Match(url)
+	id, opts := m.includes.Match(url, domain)
 	if opts == nil {
 		return false, 0
 	}
-	_, opts = m.excludes.Match(url)
+	_, opts = m.excludes.Match(url, domain)
 	return opts == nil, id
 }
