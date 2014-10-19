@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"strings"
@@ -64,8 +65,6 @@ func (h *FilteringHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("  by %s\n", rule)
 		w.WriteHeader(404)
 		return
-	} else {
-		log.Printf("accepted in %dms: %s\n", duration, r.URL.String())
 	}
 
 	if r.Method == "HEAD" {
@@ -81,6 +80,25 @@ func (h *FilteringHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	duration2 := time.Duration(0)
+	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err == nil && len(mediaType) > 0 {
+		rq.ContentType = mediaType
+		// Second level filtering, based on returned content
+		start := time.Now()
+		matched, id := h.Matcher(rq)
+		end := time.Now()
+		duration2 = end.Sub(start) / time.Millisecond
+		if matched {
+			rule := h.Rules[id]
+			log.Printf("rejected in %d/%dms: %s\n", duration, duration2, r.URL.String())
+			log.Printf("  by %s\n", rule)
+			w.WriteHeader(404)
+			return
+		}
+	}
+	log.Printf("accepted in %d/%dms: %s\n", duration, duration2, r.URL.String())
+
 	headers := w.Header()
 	for k, v := range resp.Header {
 		headers[k] = v

@@ -34,6 +34,8 @@ func getPartName(ruleType int) string {
 		return "domainanchor"
 	case Root:
 		return "root"
+	case Substring:
+		return "substring"
 	default:
 		return "unknown"
 	}
@@ -128,16 +130,23 @@ func (r *Rule) HasOpts() bool {
 	return r.Opts.Document ||
 		// len(r.Opts.Domains) > 0 // handled
 		// r.Opts.ElemHide // irrelevant
-		r.Opts.Image != nil ||
+		// r.Opts.Image != nil || // handled
 		r.Opts.Media != nil ||
-		// r.Opts.Object != nil || // cannot guess request source
+		// r.Opts.Object != nil || // handled
 		// r.Opts.ObjectSubRequest != nil || // cannot guess request source
 		r.Opts.Popup != nil ||
-		// r.Opts.Script != nil || // cannot guess request source
-		r.Opts.Stylesheet != nil ||
+		// r.Opts.Script != nil || // handled
+		// r.Opts.Stylesheet != nil || // handled
 		// r.Opts.SubDocument != nil || // cannot guess request source
 		r.Opts.ThirdParty != nil
 	// r.Opts.XmlHttpRequest != nil // cannot guess request source
+}
+
+func (r *Rule) HasContentOpts() bool {
+	return r.Opts.Image != nil ||
+		r.Opts.Object != nil ||
+		r.Opts.Script != nil ||
+		r.Opts.Stylesheet != nil
 }
 
 func ParseRule(s string) (*Rule, error) {
@@ -214,8 +223,9 @@ func ParseRules(r io.Reader) ([]*Rule, error) {
 }
 
 type Request struct {
-	URL    string
-	Domain string
+	URL         string
+	Domain      string
+	ContentType string
 }
 
 type Matcher func(rq *Request) (bool, int)
@@ -289,10 +299,41 @@ func matchOptsDomains(opts *RuleOpts, domain string) bool {
 	return accept
 }
 
+func matchOptsContent(opts *RuleOpts, contentType string) bool {
+	if opts.Image != nil {
+		isImage := strings.HasPrefix(contentType, "image/")
+		if isImage != *opts.Image {
+			return false
+		}
+	}
+	if opts.Object != nil {
+		isObject := strings.Contains(contentType, "shockwave")
+		if isObject != *opts.Object {
+			return false
+		}
+	}
+	if opts.Script != nil {
+		isScript := strings.Contains(contentType, "script")
+		if isScript != *opts.Script {
+			return false
+		}
+	}
+	if opts.Stylesheet != nil {
+		isStylesheet := strings.Contains(contentType, "css")
+		if isStylesheet != *opts.Stylesheet {
+			return false
+		}
+	}
+	return true
+}
+
 func (n *RuleNode) matchChildren(url []byte, rq *Request) (int, []*RuleOpts) {
 	if len(url) == 0 && len(n.Children) == 0 {
 		for _, opt := range n.Opts {
 			if !matchOptsDomains(opt, rq.Domain) {
+				return 0, nil
+			}
+			if !matchOptsContent(opt, rq.ContentType) {
 				return 0, nil
 			}
 		}
@@ -598,32 +639,55 @@ func NewRuleMatcher(rules []*Rule) (*RuleTree, error) {
 type RuleMatcher struct {
 	includes *RuleTree
 	excludes *RuleTree
+	// Rules requiring resource content type
+	contentIncludes *RuleTree
+	contentExcludes *RuleTree
 }
 
 func NewMatcher() *RuleMatcher {
 	return &RuleMatcher{
-		includes: NewRuleTree(),
-		excludes: NewRuleTree(),
+		includes:        NewRuleTree(),
+		excludes:        NewRuleTree(),
+		contentIncludes: NewRuleTree(),
+		contentExcludes: NewRuleTree(),
 	}
 }
 
 func (m *RuleMatcher) AddRule(rule *Rule, ruleId int) error {
-	if rule.Exception {
-		return m.excludes.AddRule(rule, ruleId)
+	var tree *RuleTree
+	if rule.HasContentOpts() {
+		if rule.Exception {
+			tree = m.contentExcludes
+		} else {
+			tree = m.contentIncludes
+		}
 	} else {
-		return m.includes.AddRule(rule, ruleId)
+		if rule.Exception {
+			tree = m.excludes
+		} else {
+			tree = m.includes
+		}
 	}
+	return tree.AddRule(rule, ruleId)
 }
 
 func (m *RuleMatcher) Match(rq *Request) (bool, int) {
-	id, opts := m.includes.Match(rq)
+	inc := m.includes
+	exc := m.excludes
+	if len(rq.ContentType) > 0 {
+		inc = m.contentIncludes
+		exc = m.contentExcludes
+	}
+	id, opts := inc.Match(rq)
 	if opts == nil {
 		return false, 0
 	}
-	_, opts = m.excludes.Match(rq)
+	_, opts = exc.Match(rq)
 	return opts == nil, id
 }
 
 func (m *RuleMatcher) String() string {
-	return fmt.Sprintf("excludes:\n%s\nincludes:\n%s\n", m.excludes, m.includes)
+	return fmt.Sprintf("includes:\n%s\nexcludes:\n%s\n"+
+		"content-includes:\n%s\ncontent-excludes:\n%s\n",
+		m.includes, m.excludes, m.contentIncludes, m.contentExcludes)
 }

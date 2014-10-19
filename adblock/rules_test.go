@@ -8,8 +8,9 @@ import (
 )
 
 type TestInput struct {
-	URL     string
-	Matched bool
+	URL         string
+	Matched     bool
+	ContentType string
 }
 
 func loadMatcher(path string) (*RuleMatcher, int, error) {
@@ -38,23 +39,35 @@ func testInputs(t *testing.T, rules string, tests []TestInput) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := NewRuleMatcher(parsed)
-	if err != nil {
-		t.Fatal(err)
+	m := NewMatcher()
+	for _, rule := range parsed {
+		err = m.AddRule(rule, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, test := range tests {
-		domain := ""
+		rq := Request{URL: test.URL, ContentType: test.ContentType}
 		if u, err := url.Parse(test.URL); err == nil {
-			domain = u.Host
+			rq.Domain = u.Host
 		}
-		_, opts := m.Match(test.URL, domain)
-		res := opts != nil
-		if res && !test.Matched {
-			t.Errorf("unexpected match: '%s'", test.URL)
-		} else if !res && test.Matched {
-			t.Errorf("unexpected miss: '%s'", test.URL)
+		matched, _ := m.Match(&rq)
+		if matched && !test.Matched {
+			t.Errorf("unexpected match: '%+v'", test)
+		} else if !matched && test.Matched {
+			t.Errorf("unexpected miss: '%+v'", test)
 		}
 	}
+}
+
+func TestEmptyMatcher(t *testing.T) {
+	testInputs(t, `
+
+`,
+		[]TestInput{
+			{URL: "", Matched: false},
+			{URL: "foo", Matched: false},
+		})
 }
 
 func TestExactMatch(t *testing.T) {
@@ -62,10 +75,10 @@ func TestExactMatch(t *testing.T) {
 _ads_text.
 `,
 		[]TestInput{
-			{"", false},
-			{"foo", false},
-			{"stuff=1&_ads_text.", true},
-			{"stuff=1&_ads_text.field=bar", true},
+			{URL: "", Matched: false},
+			{URL: "foo", Matched: false},
+			{URL: "stuff=1&_ads_text.", Matched: true},
+			{URL: "stuff=1&_ads_text.field=bar", Matched: true},
 		})
 }
 
@@ -75,14 +88,14 @@ a*b
 ad
 `,
 		[]TestInput{
-			{"", false},
-			{"foo", false},
-			{"a", false},
-			{"ab", true},
-			{"acb", true},
-			{"cacb", true},
-			{"cacbc", true},
-			{"ad", true},
+			{URL: "", Matched: false},
+			{URL: "foo", Matched: false},
+			{URL: "a", Matched: false},
+			{URL: "ab", Matched: true},
+			{URL: "acb", Matched: true},
+			{URL: "cacb", Matched: true},
+			{URL: "cacbc", Matched: true},
+			{URL: "ad", Matched: true},
 		})
 }
 
@@ -92,12 +105,12 @@ a^
 ^d
 `,
 		[]TestInput{
-			{"", false},
-			{"a", true},
-			{"ab", false},
-			{"a:b", true},
-			{"d", false},
-			{"e:d", true},
+			{URL: "", Matched: false},
+			{URL: "a", Matched: true},
+			{URL: "ab", Matched: false},
+			{URL: "a:b", Matched: true},
+			{URL: "d", Matched: false},
+			{URL: "e:d", Matched: true},
 		})
 }
 
@@ -108,16 +121,15 @@ b|
 |c|
 `,
 		[]TestInput{
-			//{"", false},
-			{"a", true},
-			{"za", false},
-			{"az", true},
-			{"b", true},
-			{"zb", true},
-			{"bz", false},
-			{"c", true},
-			{"zc", false},
-			{"cz", false},
+			{URL: "a", Matched: true},
+			{URL: "za", Matched: false},
+			{URL: "az", Matched: true},
+			{URL: "b", Matched: true},
+			{URL: "zb", Matched: true},
+			{URL: "bz", Matched: false},
+			{URL: "c", Matched: true},
+			{URL: "zc", Matched: false},
+			{URL: "cz", Matched: false},
 		})
 }
 
@@ -127,13 +139,13 @@ func TestDomainAnchor(t *testing.T) {
 ||foo.com/baz.gif
 `,
 		[]TestInput{
-			{"http://ads.example.com/foo.gif", true},
-			{"http://server1.ads.example.com/foo.gif", true},
-			{"https://ads.example.com:8000/foo.gif", true},
-			{"http://ads.example.com.ua/foo.gif", false},
-			{"http://example.com/redirect/http://ads.example.com/", false},
-			{"https://ads.foo.com/baz.gif", true},
-			{"https://ads.foo.com/baz.png", false},
+			{URL: "http://ads.example.com/foo.gif", Matched: true},
+			{URL: "http://server1.ads.example.com/foo.gif", Matched: true},
+			{URL: "https://ads.example.com:8000/foo.gif", Matched: true},
+			{URL: "http://ads.example.com.ua/foo.gif", Matched: false},
+			{URL: "http://example.com/redirect/http://ads.example.com/", Matched: false},
+			{URL: "https://ads.foo.com/baz.gif", Matched: true},
+			{URL: "https://ads.foo.com/baz.png", Matched: false},
 		})
 }
 
@@ -142,11 +154,26 @@ func TestOptsDomain(t *testing.T) {
 /ads$domain=foo.com|~info.foo.com
 `,
 		[]TestInput{
-			{"http://foo.com/ads", true},
-			{"http://other.foo.com/ads", true},
-			{"http://info.foo.com/ads", false},
-			{"http://foo.com/img", false},
-			{"http://other.com/ads", false},
+			{URL: "http://foo.com/ads", Matched: true},
+			{URL: "http://other.foo.com/ads", Matched: true},
+			{URL: "http://info.foo.com/ads", Matched: false},
+			{URL: "http://foo.com/img", Matched: false},
+			{URL: "http://other.com/ads", Matched: false},
+		})
+}
+
+func TestOptsContent(t *testing.T) {
+	testInputs(t, `
+/img$image
+/notimg$~image
+`,
+		[]TestInput{
+			{URL: "http://foo.com/img", Matched: false},
+			{URL: "http://foo.com/img", Matched: true, ContentType: "image/png"},
+			{URL: "http://foo.com/img", Matched: false, ContentType: "text/plain"},
+			{URL: "http://foo.com/notimg", Matched: false},
+			{URL: "http://foo.com/notimg", Matched: false, ContentType: "image/png"},
+			{URL: "http://foo.com/notimg", Matched: true, ContentType: "text/plain"},
 		})
 }
 
@@ -158,10 +185,13 @@ func BenchmarkSlowMatching(b *testing.B) {
 	if added < 14000 {
 		b.Fatalf("not enough rules loaded: %d", added)
 	}
-	longUrl := "http://www.facebook.com/plugins/like.php?action=recommend&app_id=172278489578477&channel=http%3A%2F%2Fstatic.ak.facebook.com%2Fconnect%2Fxd_arbiter%2Fw9JKbyW340G.js%3Fversion%3D41%23cb%3Df1980a49b4%26domain%3Dtheappendix.net%26origin%3Dhttp%253A%252F%252Ftheappendix.net%252Ff81d34bec%26relation%3Dparent.parent&font=verdana&href=http%3A%2F%2Ftheappendix.net%2Fblog%2F2013%2F7%2Fwhy-does-s-look-like-f-a-guide-to-reading-very-old-books&layout=button_count&locale=en_US&sdk=joey&send=false&show_faces=false&width=90"
+	rq := Request{
+		URL:    "http://www.facebook.com/plugins/like.php?action=recommend&app_id=172278489578477&channel=http%3A%2F%2Fstatic.ak.facebook.com%2Fconnect%2Fxd_arbiter%2Fw9JKbyW340G.js%3Fversion%3D41%23cb%3Df1980a49b4%26domain%3Dtheappendix.net%26origin%3Dhttp%253A%252F%252Ftheappendix.net%252Ff81d34bec%26relation%3Dparent.parent&font=verdana&href=http%3A%2F%2Ftheappendix.net%2Fblog%2F2013%2F7%2Fwhy-does-s-look-like-f-a-guide-to-reading-very-old-books&layout=button_count&locale=en_US&sdk=joey&send=false&show_faces=false&width=90",
+		Domain: "www.facebook.com",
+	}
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		m.Match(longUrl, "www.facebook.com")
+		m.Match(&rq)
 	}
 }
