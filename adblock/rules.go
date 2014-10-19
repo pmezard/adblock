@@ -16,7 +16,8 @@ const (
 	StartAnchor  = iota // |
 	DomainAnchor = iota // ||
 
-	Root = iota
+	Root      = iota
+	Substring = iota // Wildcard + Exact
 )
 
 func getPartName(ruleType int) string {
@@ -231,7 +232,7 @@ func (n *RuleNode) AddRule(parts []RulePart, opts *RuleOpts, id int) error {
 	// Looks for existing matching rule parts
 	part := parts[0]
 	if part.Type != Exact && part.Type != Wildcard && part.Type != Separator &&
-		part.Type != DomainAnchor {
+		part.Type != DomainAnchor && part.Type != Substring {
 		return fmt.Errorf("unknown rule part type: %+v", part)
 	}
 	var child *RuleNode
@@ -392,6 +393,21 @@ func (n *RuleNode) Match(url []byte, domain string) (int, []*RuleOpts) {
 			}
 		case Root:
 			return n.matchChildren(url, domain)
+		case Substring:
+			for {
+				if len(url) == 0 {
+					break
+				}
+				pos := bytes.Index(url, n.Value)
+				if pos < 0 {
+					break
+				}
+				url = url[pos+len(n.Value):]
+				ruleId, opts := n.matchChildren(url, domain)
+				if opts != nil {
+					return ruleId, opts
+				}
+			}
 		}
 		return 0, nil
 	}
@@ -499,6 +515,26 @@ func addLeadingTrailingWildcards(parts []RulePart) []RulePart {
 	return rewritten
 }
 
+// Rewrite Wildcard + Exact as a Substring
+func replaceWildcardWithSubstring(parts []RulePart) []RulePart {
+	rewritten := []RulePart{}
+	for i, part := range parts {
+		if i == 0 || parts[i-1].Type != Wildcard {
+			rewritten = append(rewritten, part)
+			continue
+		}
+		if part.Type != Exact {
+			rewritten = append(rewritten, part)
+			continue
+		}
+		rewritten[len(rewritten)-1] = RulePart{
+			Type:  Substring,
+			Value: part.Value,
+		}
+	}
+	return rewritten
+}
+
 func (t *RuleTree) AddRule(rule *Rule, ruleId int) error {
 	if rule.HasOpts() {
 		return fmt.Errorf("rule options are not supported")
@@ -508,6 +544,7 @@ func (t *RuleTree) AddRule(rule *Rule, ruleId int) error {
 		return err
 	}
 	rewritten = addLeadingTrailingWildcards(rewritten)
+	rewritten = replaceWildcardWithSubstring(rewritten)
 
 	if len(rewritten) == 0 {
 		return nil
