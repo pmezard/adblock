@@ -50,8 +50,12 @@ func (h *FilteringHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.URL.Host = r.Host
 	}
 
+	rq := &adblock.Request{
+		URL:    r.URL.String(),
+		Domain: r.URL.Host,
+	}
 	start := time.Now()
-	matched, id := h.Matcher(r.URL.String(), r.URL.Host)
+	matched, id := h.Matcher(rq)
 	end := time.Now()
 	duration := end.Sub(start) / time.Millisecond
 	if matched {
@@ -131,9 +135,7 @@ func loadBlackLists(paths []string) (adblock.Matcher, []string, error) {
 		read += r
 	}
 	log.Printf("blacklists built: %d / %d added\n", len(rules), read)
-	return func(url, domain string) (bool, int) {
-		return matcher.Match(url, domain)
-	}, rules, nil
+	return matcher.Match, rules, nil
 }
 
 func runProxy() error {
