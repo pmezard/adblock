@@ -138,11 +138,11 @@ func (r *Rule) HasOpts() bool {
 		// r.Opts.Object != nil || // handled
 		// r.Opts.ObjectSubRequest != nil || // cannot guess request source
 		// r.Opts.Other != nil // not sure what to do with this one
-		r.Opts.Popup != nil ||
-		// r.Opts.Script != nil || // handled
-		// r.Opts.Stylesheet != nil || // handled
-		// r.Opts.SubDocument != nil || // cannot guess request source
-		r.Opts.ThirdParty != nil
+		r.Opts.Popup != nil
+	// r.Opts.Script != nil || // handled
+	// r.Opts.Stylesheet != nil || // handled
+	// r.Opts.SubDocument != nil || // cannot guess request source
+	// r.Opts.ThirdParty != nil // handled
 	// r.Opts.XmlHttpRequest != nil // cannot guess request source
 }
 
@@ -227,9 +227,10 @@ func ParseRules(r io.Reader) ([]*Rule, error) {
 }
 
 type Request struct {
-	URL         string
-	Domain      string
-	ContentType string
+	URL          string
+	Domain       string
+	ContentType  string
+	OriginDomain string
 }
 
 type Matcher func(rq *Request) (bool, int)
@@ -331,6 +332,15 @@ func matchOptsContent(opts *RuleOpts, contentType string) bool {
 	return true
 }
 
+func matchOptsThirdParty(opts *RuleOpts, origin, domain string) bool {
+	if opts.ThirdParty == nil {
+		return true
+	}
+	isSubdomain := origin == domain ||
+		strings.HasSuffix(domain, "."+origin)
+	return isSubdomain != *opts.ThirdParty
+}
+
 func (n *RuleNode) matchChildren(url []byte, rq *Request) (int, []*RuleOpts) {
 	if len(url) == 0 && len(n.Children) == 0 {
 		for _, opt := range n.Opts {
@@ -338,6 +348,9 @@ func (n *RuleNode) matchChildren(url []byte, rq *Request) (int, []*RuleOpts) {
 				return 0, nil
 			}
 			if !matchOptsContent(opt, rq.ContentType) {
+				return 0, nil
+			}
+			if !matchOptsThirdParty(opt, rq.OriginDomain, rq.Domain) {
 				return 0, nil
 			}
 		}

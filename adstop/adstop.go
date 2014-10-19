@@ -9,6 +9,8 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -25,6 +27,7 @@ var (
 type FilteringHandler struct {
 	Matcher adblock.Matcher
 	Rules   []string
+	Jar     *cookiejar.Jar
 }
 
 func logRequest(r *http.Request) {
@@ -34,13 +37,24 @@ func logRequest(r *http.Request) {
 	log.Println(string(buf.Bytes()))
 }
 
+func getReferrerDomain(r *http.Request) string {
+	ref := r.Header.Get("Referer")
+	if len(ref) > 0 {
+		u, err := url.Parse(ref)
+		if err == nil {
+			return u.Host
+		}
+	}
+	return ""
+}
+
 func (h *FilteringHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if *logp {
 		logRequest(r)
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Jar: h.Jar}
 	r.RequestURI = ""
 	if len(r.URL.Scheme) > 0 {
 		r.URL.Scheme = strings.Map(unicode.ToLower, r.URL.Scheme)
@@ -52,8 +66,9 @@ func (h *FilteringHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rq := &adblock.Request{
-		URL:    r.URL.String(),
-		Domain: r.URL.Host,
+		URL:          r.URL.String(),
+		Domain:       r.URL.Host,
+		OriginDomain: getReferrerDomain(r),
 	}
 	start := time.Now()
 	matched, id := h.Matcher(rq)
@@ -162,7 +177,15 @@ func runProxy() error {
 	if err != nil {
 		return err
 	}
-	h := &FilteringHandler{Matcher: matcher, Rules: rules}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return err
+	}
+	h := &FilteringHandler{
+		Matcher: matcher,
+		Rules:   rules,
+		Jar:     jar,
+	}
 	return http.ListenAndServe(*listen, h)
 }
 

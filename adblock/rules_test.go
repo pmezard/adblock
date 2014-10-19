@@ -8,9 +8,10 @@ import (
 )
 
 type TestInput struct {
-	URL         string
-	Matched     bool
-	ContentType string
+	URL          string
+	Matched      bool
+	ContentType  string
+	OriginDomain string
 }
 
 func loadMatcher(path string) (*RuleMatcher, int, error) {
@@ -47,7 +48,11 @@ func testInputs(t *testing.T, rules string, tests []TestInput) {
 		}
 	}
 	for _, test := range tests {
-		rq := Request{URL: test.URL, ContentType: test.ContentType}
+		rq := Request{
+			URL:          test.URL,
+			ContentType:  test.ContentType,
+			OriginDomain: test.OriginDomain,
+		}
 		if u, err := url.Parse(test.URL); err == nil {
 			rq.Domain = u.Host
 		}
@@ -174,6 +179,19 @@ func TestOptsContent(t *testing.T) {
 			{URL: "http://foo.com/notimg", Matched: false},
 			{URL: "http://foo.com/notimg", Matched: false, ContentType: "image/png"},
 			{URL: "http://foo.com/notimg", Matched: true, ContentType: "text/plain"},
+		})
+}
+
+func TestOptsThirdParty(t *testing.T) {
+	testInputs(t, `
+/img$third-party
+`,
+		[]TestInput{
+			{URL: "http://foo.com/img", Matched: true},
+			{URL: "http://foo.com/img", Matched: true, OriginDomain: "bar.com"},
+			{URL: "http://foo.com/img", Matched: false, OriginDomain: "foo.com"},
+			{URL: "http://foo.com/img", Matched: true, OriginDomain: "sub.foo.com"},
+			{URL: "http://sub.foo.com/img", Matched: false, OriginDomain: "foo.com"},
 		})
 }
 
