@@ -455,24 +455,17 @@ func rewriteDomainAnchors(parts []RulePart) ([]RulePart, error) {
 	return rewritten, nil
 }
 
-func (t *RuleTree) AddRule(rule *Rule, ruleId int) error {
-	if rule.HasOpts() {
-		return fmt.Errorf("rule options are not supported")
-	}
-	rewritten, err := rewriteDomainAnchors(rule.Parts)
-	if err != nil {
-		return err
-	}
-
-	// Add wildcard prefix to most rules
-	parts := []RulePart{}
-	for i, part := range rewritten {
+// Add explicit leading and trailing wildcards where they are implicitely
+// required.
+func addLeadingTrailingWildcards(parts []RulePart) []RulePart {
+	rewritten := []RulePart{}
+	for i, part := range parts {
 		first := i == 0
-		last := i == len(rewritten)-1
+		last := i == len(parts)-1
 		if first {
 			// Match every leading byte unless the rule starts with an anchor
 			if part.Type != StartAnchor && part.Type != DomainAnchor {
-				parts = append(parts,
+				rewritten = append(rewritten,
 					RulePart{
 						Type: Wildcard,
 					})
@@ -483,30 +476,43 @@ func (t *RuleTree) AddRule(rule *Rule, ruleId int) error {
 			if !first && !last {
 				// Anchors in the middle of the rules are not anchor but
 				// literal "|"
-				parts = append(parts,
+				rewritten = append(rewritten,
 					RulePart{
 						Type:  Exact,
 						Value: "|",
 					})
 			}
 		} else {
-			parts = append(parts, part)
+			rewritten = append(rewritten, part)
 		}
 
 		if last {
 			// Match every trailing byte unless the rule ends with an anchor
 			if part.Type != StartAnchor {
-				parts = append(parts,
+				rewritten = append(rewritten,
 					RulePart{
 						Type: Wildcard,
 					})
 			}
 		}
 	}
-	if len(parts) == 0 {
+	return rewritten
+}
+
+func (t *RuleTree) AddRule(rule *Rule, ruleId int) error {
+	if rule.HasOpts() {
+		return fmt.Errorf("rule options are not supported")
+	}
+	rewritten, err := rewriteDomainAnchors(rule.Parts)
+	if err != nil {
+		return err
+	}
+	rewritten = addLeadingTrailingWildcards(rewritten)
+
+	if len(rewritten) == 0 {
 		return nil
 	}
-	return t.root.AddRule(parts, &rule.Opts, ruleId)
+	return t.root.AddRule(rewritten, &rule.Opts, ruleId)
 }
 
 func (t *RuleTree) Match(url, domain string) (int, []*RuleOpts) {
