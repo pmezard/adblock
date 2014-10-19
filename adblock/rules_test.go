@@ -2,14 +2,35 @@ package adblock
 
 import (
 	"bytes"
-	"fmt"
 	"net/url"
+	"os"
 	"testing"
 )
 
 type TestInput struct {
 	URL     string
 	Matched bool
+}
+
+func loadMatcher(path string) (*RuleMatcher, int, error) {
+	fp, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer fp.Close()
+	parsed, err := ParseRules(fp)
+	if err != nil {
+		return nil, 0, err
+	}
+	m := NewMatcher()
+	added := 0
+	for _, rule := range parsed {
+		err := m.AddRule(rule, 0)
+		if err == nil {
+			added += 1
+		}
+	}
+	return m, added, nil
 }
 
 func testInputs(t *testing.T, rules string, tests []TestInput) {
@@ -21,7 +42,6 @@ func testInputs(t *testing.T, rules string, tests []TestInput) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Printf("%s\n", m)
 	for _, test := range tests {
 		domain := ""
 		if u, err := url.Parse(test.URL); err == nil {
@@ -128,4 +148,20 @@ func TestOptsDomain(t *testing.T) {
 			{"http://foo.com/img", false},
 			{"http://other.com/ads", false},
 		})
+}
+
+func BenchmarkSlowMatching(b *testing.B) {
+	m, added, err := loadMatcher("testdata/easylist.txt")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if added < 14000 {
+		b.Fatalf("not enough rules loaded: %d", added)
+	}
+	longUrl := "http://www.facebook.com/plugins/like.php?action=recommend&app_id=172278489578477&channel=http%3A%2F%2Fstatic.ak.facebook.com%2Fconnect%2Fxd_arbiter%2Fw9JKbyW340G.js%3Fversion%3D41%23cb%3Df1980a49b4%26domain%3Dtheappendix.net%26origin%3Dhttp%253A%252F%252Ftheappendix.net%252Ff81d34bec%26relation%3Dparent.parent&font=verdana&href=http%3A%2F%2Ftheappendix.net%2Fblog%2F2013%2F7%2Fwhy-does-s-look-like-f-a-guide-to-reading-very-old-books&layout=button_count&locale=en_US&sdk=joey&send=false&show_faces=false&width=90"
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		m.Match(longUrl, "www.facebook.com")
+	}
 }

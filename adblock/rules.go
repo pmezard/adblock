@@ -542,11 +542,7 @@ func (t *RuleTree) String() string {
 func NewRuleMatcher(rules []*Rule) (*RuleTree, error) {
 	tree := NewRuleTree()
 	for _, r := range rules {
-		err := tree.AddRule(r, 0)
-		//if err != nil {
-		//	return nil, err
-		//}
-		_ = err
+		tree.AddRule(r, 0)
 	}
 	return tree, nil
 }
