@@ -56,6 +56,7 @@ type RuleOpts struct {
 	Media            *bool
 	Object           *bool
 	ObjectSubRequest *bool
+	Other            *bool
 	Popup            *bool
 	Script           *bool
 	Stylesheet       *bool
@@ -84,6 +85,8 @@ func NewRuleOpts(s string) (RuleOpts, error) {
 			opts.Object = &value
 		case opt == "object-subrequest":
 			opts.ObjectSubRequest = &value
+		case opt == "other":
+			opts.Other = &value
 		case opt == "subdocument":
 			opts.SubDocument = &value
 		case opt == "document":
@@ -134,6 +137,7 @@ func (r *Rule) HasOpts() bool {
 		r.Opts.Media != nil ||
 		// r.Opts.Object != nil || // handled
 		// r.Opts.ObjectSubRequest != nil || // cannot guess request source
+		// r.Opts.Other != nil // not sure what to do with this one
 		r.Opts.Popup != nil ||
 		// r.Opts.Script != nil || // handled
 		// r.Opts.Stylesheet != nil || // handled
