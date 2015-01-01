@@ -5,17 +5,14 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"mime"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"os"
-	"strings"
 	"time"
-	"unicode"
 
+	"github.com/elazarl/goproxy"
 	"github.com/pmezard/adblock/adblock"
 )
 
@@ -27,7 +24,6 @@ var (
 type FilteringHandler struct {
 	Matcher adblock.Matcher
 	Rules   []string
-	Jar     *cookiejar.Jar
 }
 
 func logRequest(r *http.Request) {
@@ -48,26 +44,24 @@ func getReferrerDomain(r *http.Request) string {
 	return ""
 }
 
-func (h *FilteringHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+type ProxyState struct {
+	Duration time.Duration
+}
+
+func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
+	*http.Request, *http.Response) {
 
 	if *logp {
 		logRequest(r)
 	}
 
-	client := &http.Client{Jar: h.Jar}
-	r.RequestURI = ""
-	if len(r.URL.Scheme) > 0 {
-		r.URL.Scheme = strings.Map(unicode.ToLower, r.URL.Scheme)
-	} else {
-		r.URL.Scheme = "http"
+	host := r.URL.Host
+	if host == "" {
+		host = r.Host
 	}
-	if len(r.URL.Host) == 0 {
-		r.URL.Host = r.Host
-	}
-
 	rq := &adblock.Request{
 		URL:          r.URL.String(),
-		Domain:       r.URL.Host,
+		Domain:       host,
 		OriginDomain: getReferrerDomain(r),
 	}
 	start := time.Now()
@@ -78,51 +72,53 @@ func (h *FilteringHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rule := h.Rules[id]
 		log.Printf("rejected in %dms: %s\n", duration, r.URL.String())
 		log.Printf("  by %s\n", rule)
-		w.WriteHeader(404)
-		return
+		return r, goproxy.NewResponse(r, goproxy.ContentTypeText,
+			http.StatusNotFound, "Not Found")
 	}
+	ctx.UserData = &ProxyState{
+		Duration: duration,
+	}
+	return r, nil
+}
 
-	if r.Method == "HEAD" {
-		r.Header.Del("Accept-Encoding")
-	}
-	r.Close = true
+func (h *FilteringHandler) OnResponse(r *http.Response,
+	ctx *goproxy.ProxyCtx) *http.Response {
 
-	resp, err := client.Do(r)
-	if resp.Body != nil {
-		defer resp.Body.Close()
-	}
-	if err != nil && err != io.EOF {
-		log.Printf("error: %s\n", err)
-		if !*logp {
-			logRequest(r)
-		}
-		return
+	state, ok := ctx.UserData.(*ProxyState)
+	if !ok {
+		// The request was rejected by the previous handler
+		return r
 	}
 	duration2 := time.Duration(0)
-	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err == nil && len(mediaType) > 0 {
-		rq.ContentType = mediaType
+		host := ctx.Req.URL.Host
+		if host == "" {
+			host = ctx.Req.Host
+		}
+		rq := &adblock.Request{
+			URL:          ctx.Req.URL.String(),
+			Domain:       host,
+			OriginDomain: getReferrerDomain(ctx.Req),
+			ContentType:  mediaType,
+		}
 		// Second level filtering, based on returned content
 		start := time.Now()
 		matched, id := h.Matcher(rq)
 		end := time.Now()
 		duration2 = end.Sub(start) / time.Millisecond
 		if matched {
+			r.Body.Close()
 			rule := h.Rules[id]
-			log.Printf("rejected in %d/%dms: %s\n", duration, duration2, r.URL.String())
+			log.Printf("rejected in %d/%dms: %s\n", state.Duration, duration2,
+				ctx.Req.URL.String())
 			log.Printf("  by %s\n", rule)
-			w.WriteHeader(404)
-			return
+			return goproxy.NewResponse(ctx.Req, goproxy.ContentTypeText,
+				http.StatusNotFound, "Not Found")
 		}
 	}
-	log.Printf("accepted in %d/%dms: %s\n", duration, duration2, r.URL.String())
-
-	headers := w.Header()
-	for k, v := range resp.Header {
-		headers[k] = v
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(w, resp.Body)
+	log.Printf("accepted in %d/%dms: %s\n", state.Duration, duration2, ctx.Req.URL.String())
+	return r
 }
 
 func loadBlackList(path string, matcher *adblock.RuleMatcher,
@@ -179,16 +175,24 @@ func runProxy() error {
 	if err != nil {
 		return err
 	}
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		return err
-	}
 	h := &FilteringHandler{
 		Matcher: matcher,
 		Rules:   rules,
-		Jar:     jar,
 	}
-	return http.ListenAndServe(*listen, h)
+	proxy := goproxy.NewProxyHttpServer()
+	proxy.NonproxyHandler = http.HandlerFunc(
+		func(w http.ResponseWriter, req *http.Request) {
+			if req.Host == "" {
+				log.Printf("Cannot handle requests without Host header, e.g., HTTP 1.0")
+				return
+			}
+			req.URL.Scheme = "http"
+			req.URL.Host = req.Host
+			proxy.ServeHTTP(w, req)
+		})
+	proxy.OnRequest().DoFunc(h.OnRequest)
+	proxy.OnResponse().DoFunc(h.OnResponse)
+	return http.ListenAndServe(*listen, proxy)
 }
 
 func main() {
