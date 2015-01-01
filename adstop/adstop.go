@@ -7,18 +7,21 @@ import (
 	"fmt"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"time"
 
 	"github.com/elazarl/goproxy"
+	"github.com/inconshreveable/go-vhost"
 	"github.com/pmezard/adblock/adblock"
 )
 
 var (
-	listen = flag.String("listen", "localhost:1080", "listen on address")
-	logp   = flag.Bool("log", false, "enable logging")
+	httpAddr  = flag.String("http", "localhost:1080", "HTTP handler address")
+	httpsAddr = flag.String("https", "localhost:1081", "HTTPS handler address")
+	logp      = flag.Bool("log", false, "enable logging")
 )
 
 type FilteringHandler struct {
@@ -46,6 +49,7 @@ func getReferrerDomain(r *http.Request) string {
 
 type ProxyState struct {
 	Duration time.Duration
+	URL      string
 }
 
 func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
@@ -77,6 +81,7 @@ func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
 	}
 	ctx.UserData = &ProxyState{
 		Duration: duration,
+		URL:      r.URL.String(),
 	}
 	return r, nil
 }
@@ -111,13 +116,13 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 			r.Body.Close()
 			rule := h.Rules[id]
 			log.Printf("rejected in %d/%dms: %s\n", state.Duration, duration2,
-				ctx.Req.URL.String())
+				state.URL)
 			log.Printf("  by %s\n", rule)
 			return goproxy.NewResponse(ctx.Req, goproxy.ContentTypeText,
 				http.StatusNotFound, "Not Found")
 		}
 	}
-	log.Printf("accepted in %d/%dms: %s\n", state.Duration, duration2, ctx.Req.URL.String())
+	log.Printf("accepted in %d/%dms: %s\n", state.Duration, duration2, state.URL)
 	return r
 }
 
@@ -169,6 +174,31 @@ func loadBlackLists(paths []string) (adblock.Matcher, []string, error) {
 	return matcher.Match, rules, nil
 }
 
+// copied/converted from https.go
+type dumbResponseWriter struct {
+	net.Conn
+}
+
+func (dumb dumbResponseWriter) Header() http.Header {
+	panic("Header() should not be called on this ResponseWriter")
+}
+
+func (dumb dumbResponseWriter) Write(buf []byte) (int, error) {
+	if bytes.Equal(buf, []byte("HTTP/1.0 200 OK\r\n\r\n")) {
+		// throw away the HTTP OK response from the faux CONNECT request
+		return len(buf), nil
+	}
+	return dumb.Conn.Write(buf)
+}
+
+func (dumb dumbResponseWriter) WriteHeader(code int) {
+	panic("WriteHeader() should not be called on this ResponseWriter")
+}
+
+func (dumb dumbResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return dumb, bufio.NewReadWriter(bufio.NewReader(dumb), bufio.NewWriter(dumb)), nil
+}
+
 func runProxy() error {
 	flag.Parse()
 	matcher, rules, err := loadBlackLists(flag.Args())
@@ -190,9 +220,46 @@ func runProxy() error {
 			req.URL.Host = req.Host
 			proxy.ServeHTTP(w, req)
 		})
+	proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
 	proxy.OnRequest().DoFunc(h.OnRequest)
 	proxy.OnResponse().DoFunc(h.OnResponse)
-	return http.ListenAndServe(*listen, proxy)
+	go func() {
+		http.ListenAndServe(*httpAddr, proxy)
+	}()
+
+	// listen to the TLS ClientHello but make it a CONNECT request instead
+	ln, err := net.Listen("tcp", *httpsAddr)
+	if err != nil {
+		return err
+	}
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			log.Printf("error accepting new connection - %v", err)
+			continue
+		}
+		go func(c net.Conn) {
+			tlsConn, err := vhost.TLS(c)
+			if err != nil {
+				log.Printf("error accepting new connection - %v", err)
+			}
+			if tlsConn.Host() == "" {
+				log.Printf("cannot support non-SNI enabled clients")
+				return
+			}
+			connectReq := &http.Request{
+				Method: "CONNECT",
+				URL: &url.URL{
+					Opaque: tlsConn.Host(),
+					Host:   net.JoinHostPort(tlsConn.Host(), "443"),
+				},
+				Host:   tlsConn.Host(),
+				Header: make(http.Header),
+			}
+			resp := dumbResponseWriter{tlsConn}
+			proxy.ServeHTTP(resp, connectReq)
+		}(c)
+	}
 }
 
 func main() {
