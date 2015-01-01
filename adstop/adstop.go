@@ -88,6 +88,9 @@ func (h *FilteringHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Close = true
 
 	resp, err := client.Do(r)
+	if resp.Body != nil {
+		defer resp.Body.Close()
+	}
 	if err != nil && err != io.EOF {
 		log.Printf("error: %s\n", err)
 		if !*logp {
@@ -120,7 +123,6 @@ func (h *FilteringHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, err = io.Copy(w, resp.Body)
-	resp.Body.Close()
 }
 
 func loadBlackList(path string, matcher *adblock.RuleMatcher,
