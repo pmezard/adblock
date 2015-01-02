@@ -20,6 +20,7 @@ var (
 	httpAddr  = flag.String("http", "localhost:1080", "HTTP handler address")
 	httpsAddr = flag.String("https", "localhost:1081", "HTTPS handler address")
 	logp      = flag.Bool("log", false, "enable logging")
+	cacheDir  = flag.String("cache", ".cache", "cache directory")
 )
 
 type FilteringHandler struct {
@@ -153,7 +154,7 @@ func (dumb dumbResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 func runProxy() error {
 	flag.Parse()
 	log.Printf("loading rules")
-	cache, err := NewRuleCache(".cache", flag.Args(), 24*time.Hour)
+	cache, err := NewRuleCache(*cacheDir, flag.Args(), 24*time.Hour)
 	if err != nil {
 		return err
 	}
