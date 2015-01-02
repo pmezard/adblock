@@ -4,13 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"flag"
-	"fmt"
 	"log"
 	"mime"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"time"
 
 	"github.com/elazarl/goproxy"
@@ -25,8 +23,7 @@ var (
 )
 
 type FilteringHandler struct {
-	Matcher adblock.Matcher
-	Rules   []string
+	Cache *RuleCache
 }
 
 func logRequest(r *http.Request) {
@@ -68,12 +65,13 @@ func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
 		Domain:       host,
 		OriginDomain: getReferrerDomain(r),
 	}
+	rules := h.Cache.Rules()
 	start := time.Now()
-	matched, id := h.Matcher(rq)
+	matched, id := rules.Matcher.Match(rq)
 	end := time.Now()
 	duration := end.Sub(start) / time.Millisecond
 	if matched {
-		rule := h.Rules[id]
+		rule := rules.Rules[id]
 		log.Printf("rejected in %dms: %s\n", duration, r.URL.String())
 		log.Printf("  by %s\n", rule)
 		return r, goproxy.NewResponse(r, goproxy.ContentTypeText,
@@ -108,13 +106,14 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 			ContentType:  mediaType,
 		}
 		// Second level filtering, based on returned content
+		rules := h.Cache.Rules()
 		start := time.Now()
-		matched, id := h.Matcher(rq)
+		matched, id := rules.Matcher.Match(rq)
 		end := time.Now()
 		duration2 = end.Sub(start) / time.Millisecond
 		if matched {
 			r.Body.Close()
-			rule := h.Rules[id]
+			rule := rules.Rules[id]
 			log.Printf("rejected in %d/%dms: %s\n", state.Duration, duration2,
 				state.URL)
 			log.Printf("  by %s\n", rule)
@@ -124,54 +123,6 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 	}
 	log.Printf("accepted in %d/%dms: %s\n", state.Duration, duration2, state.URL)
 	return r
-}
-
-func loadBlackList(path string, matcher *adblock.RuleMatcher,
-	rules []string) ([]string, int, error) {
-
-	fp, err := os.Open(path)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer fp.Close()
-
-	read := 0
-	scanner := bufio.NewScanner(fp)
-	for scanner.Scan() {
-		s := scanner.Text()
-		rule, err := adblock.ParseRule(s)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: could not parse rule:\n  %s\n  %s\n",
-				scanner.Text(), err)
-			continue
-		}
-		if rule == nil {
-			continue
-		}
-		err = matcher.AddRule(rule, len(rules))
-		read += 1
-		if err == nil {
-			rules = append(rules, s)
-		}
-	}
-	return rules, read, scanner.Err()
-}
-
-func loadBlackLists(paths []string) (adblock.Matcher, []string, error) {
-	log.Printf("reading black lists\n")
-	matcher := adblock.NewMatcher()
-	read := 0
-	rules := []string{}
-	for _, path := range paths {
-		updated, r, err := loadBlackList(path, matcher, rules)
-		rules = updated
-		if err != nil {
-			return nil, nil, err
-		}
-		read += r
-	}
-	log.Printf("blacklists built: %d / %d added\n", len(rules), read)
-	return matcher.Match, rules, nil
 }
 
 // copied/converted from https.go
@@ -201,14 +152,16 @@ func (dumb dumbResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 
 func runProxy() error {
 	flag.Parse()
-	matcher, rules, err := loadBlackLists(flag.Args())
+	log.Printf("loading rules")
+	cache, err := NewRuleCache(".cache", flag.Args(), 24*time.Hour)
 	if err != nil {
 		return err
 	}
 	h := &FilteringHandler{
-		Matcher: matcher,
-		Rules:   rules,
+		Cache: cache,
 	}
+
+	log.Printf("starting servers")
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.NonproxyHandler = http.HandlerFunc(
 		func(w http.ResponseWriter, req *http.Request) {
