@@ -1,3 +1,10 @@
+/*
+abpcheck is a command line utility to verify AdBlockPlus rules. Running:
+
+	$ abpcheck easylist.txt
+
+prints any rules which cannot be parsed by adblock package.
+*/
 package main
 
 import (
