@@ -295,15 +295,15 @@ type Request struct {
 // RuleNode is the node structure of rule trees.
 // Rule trees start with a Root node containing any number of non-Root
 // RuleNodes.
-type RuleNode struct {
+type ruleNode struct {
 	Type     int
 	Value    []byte
 	Opts     []*RuleOpts // non-empty on terminating nodes
-	Children []*RuleNode
+	Children []*ruleNode
 	RuleId   int
 }
 
-func (n *RuleNode) AddRule(parts []RulePart, opts *RuleOpts, id int) error {
+func (n *ruleNode) AddRule(parts []RulePart, opts *RuleOpts, id int) error {
 	if len(parts) == 0 {
 		n.Opts = append(n.Opts, opts)
 		n.RuleId = id
@@ -315,7 +315,7 @@ func (n *RuleNode) AddRule(parts []RulePart, opts *RuleOpts, id int) error {
 		part.Type != DomainAnchor && part.Type != Substring {
 		return fmt.Errorf("unknown rule part type: %+v", part)
 	}
-	var child *RuleNode
+	var child *ruleNode
 	value := []byte(part.Value)
 	for _, c := range n.Children {
 		// TODO: be smarter with ExactMatch
@@ -326,7 +326,7 @@ func (n *RuleNode) AddRule(parts []RulePart, opts *RuleOpts, id int) error {
 	}
 	created := false
 	if child == nil {
-		child = &RuleNode{
+		child = &ruleNode{
 			Type:  part.Type,
 			Value: []byte(part.Value),
 		}
@@ -401,7 +401,7 @@ func matchOptsThirdParty(opts *RuleOpts, origin, domain string) bool {
 	return isSubdomain != *opts.ThirdParty
 }
 
-func (n *RuleNode) matchChildren(url []byte, rq *Request) (int, []*RuleOpts) {
+func (n *ruleNode) matchChildren(url []byte, rq *Request) (int, []*RuleOpts) {
 	if len(url) == 0 && len(n.Children) == 0 {
 		for _, opt := range n.Opts {
 			if !matchOptsDomains(opt, rq.Domain) {
@@ -483,7 +483,7 @@ Port:
 // the URL is completely matched by a terminal node, a node with a non-empty
 // Opts set, the Opts are applied on the Request properties.  Any option match
 // validates the URL as a whole and the matching rule identifier is returned.
-func (n *RuleNode) Match(url []byte, rq *Request) (int, []*RuleOpts) {
+func (n *ruleNode) Match(url []byte, rq *Request) (int, []*RuleOpts) {
 	for {
 		//fmt.Printf("matching '%s' with %s[%s][final:%v]\n",
 		//	string(url), getPartName(n.Type), string(n.Value), n.Opts != nil)
@@ -543,14 +543,14 @@ func (n *RuleNode) Match(url []byte, rq *Request) (int, []*RuleOpts) {
 }
 
 // A RuleTree matches a set of adblockplus rules.
-type RuleTree struct {
-	root *RuleNode
+type ruleTree struct {
+	root *ruleNode
 }
 
 // NewRuleTree returns a new empty RuleTree.
-func NewRuleTree() *RuleTree {
-	return &RuleTree{
-		root: &RuleNode{
+func newRuleTree() *ruleTree {
+	return &ruleTree{
+		root: &ruleNode{
 			Type: Root,
 		},
 	}
@@ -666,7 +666,7 @@ func replaceWildcardWithSubstring(parts []RulePart) []RulePart {
 }
 
 // AddRule add a rule and its identifier to the rule tree.
-func (t *RuleTree) AddRule(rule *Rule, ruleId int) error {
+func (t *ruleTree) AddRule(rule *Rule, ruleId int) error {
 	if rule.HasOpts() {
 		return fmt.Errorf("rule options are not supported")
 	}
@@ -685,14 +685,14 @@ func (t *RuleTree) AddRule(rule *Rule, ruleId int) error {
 
 // Match evaluates the request. If it matches any rule, it returns the
 // rule identifier and its options.
-func (t *RuleTree) Match(rq *Request) (int, []*RuleOpts) {
+func (t *ruleTree) Match(rq *Request) (int, []*RuleOpts) {
 	return t.root.Match([]byte(rq.URL), rq)
 }
 
-func (t *RuleTree) String() string {
+func (t *ruleTree) String() string {
 	w := &bytes.Buffer{}
-	var printNode func(*RuleNode, int)
-	printNode = func(n *RuleNode, level int) {
+	var printNode func(*ruleNode, int)
+	printNode = func(n *ruleNode, level int) {
 		w.WriteString(strings.Repeat(" ", level))
 		w.WriteString(getPartName(n.Type))
 		switch n.Type {
@@ -718,27 +718,27 @@ func (t *RuleTree) String() string {
 // RuleMatcher implements a complete set of include and exclude AdblockPlus
 // rules.
 type RuleMatcher struct {
-	includes *RuleTree
-	excludes *RuleTree
+	includes *ruleTree
+	excludes *ruleTree
 	// Rules requiring resource content type
-	contentIncludes *RuleTree
-	contentExcludes *RuleTree
+	contentIncludes *ruleTree
+	contentExcludes *ruleTree
 }
 
 // NewMatcher returns a new empty matcher.
 func NewMatcher() *RuleMatcher {
 	return &RuleMatcher{
-		includes:        NewRuleTree(),
-		excludes:        NewRuleTree(),
-		contentIncludes: NewRuleTree(),
-		contentExcludes: NewRuleTree(),
+		includes:        newRuleTree(),
+		excludes:        newRuleTree(),
+		contentIncludes: newRuleTree(),
+		contentExcludes: newRuleTree(),
 	}
 }
 
 // AddRule adds a rule to the matcher. Supplied rule identifier will be
 // returned by Match().
 func (m *RuleMatcher) AddRule(rule *Rule, ruleId int) error {
-	var tree *RuleTree
+	var tree *ruleTree
 	if rule.HasContentOpts() {
 		if rule.Exception {
 			tree = m.contentExcludes
