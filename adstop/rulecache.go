@@ -147,7 +147,7 @@ func (c *RuleCache) load(url string, refresh bool) (io.ReadCloser, time.Time, er
 
 	err = c.fetchAndCache(url)
 	if err != nil {
-		log.Print("could not fetch %s: %s", url, err)
+		log.Printf("could not fetch %s: %s", url, err)
 	}
 	fp, date, err = c.getCached(url)
 	return fp, date, err
