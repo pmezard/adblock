@@ -1,3 +1,38 @@
+/*
+Package implements a parser and a matcher for AdBlockPlus rules.
+
+The syntax of AdBlockPlus rules is partially defined in
+https://adblockplus.org/en/filter-cheatsheet and
+https://adblockplus.org/en/filters.
+
+To parse rules and build a matcher:
+
+	matcher := adblock.NewMatcher()
+	fp, err := os.Open("easylist.txt")
+	...
+	rules, err := adblock.ParseRules(fp)
+	for _, rule := range rules {
+		err = matcher.AddRule(rule, 0)
+		...
+	}
+
+To match HTTP requests:
+
+	host := r.URL.Host
+	if host == "" {
+		host = r.Host
+	}
+	rq := adblock.Request{
+		URL: r.URL.String(),
+		Domain: host,
+		// possibly fill OriginDomain from Referrer header
+		// and ContentType from HTTP response Content-Type.
+	}
+	matched, id := matcher.Match(rq)
+	if matched {
+		// Use the rule identifier to print which rules was matched
+	}
+*/
 package adblock
 
 import (
@@ -41,11 +76,17 @@ func getPartName(ruleType int) string {
 	}
 }
 
+// RulePart is the base component of rules. It represents a single
+// matching element, like an exact match, a wildcard, a domain anchor...
 type RulePart struct {
-	Type  int
+	// Rule type, like Exact, Wildcard, etc.
+	Type int
+	// Rule part string representation
 	Value string
 }
 
+// RuleOpts defines custom rules applied to content once the URL part
+// has been matched by the RuleParts.
 type RuleOpts struct {
 	Raw              string
 	Collapse         *bool
@@ -65,6 +106,8 @@ type RuleOpts struct {
 	XmlHttpRequest   *bool
 }
 
+// NewRuleOpts parses the rule part following the '$' separator
+// and return content matching options.
 func NewRuleOpts(s string) (RuleOpts, error) {
 	opts := RuleOpts{Raw: s}
 	for _, opt := range strings.Split(s, ",") {
@@ -117,11 +160,16 @@ func NewRuleOpts(s string) (RuleOpts, error) {
 	return opts, nil
 }
 
+// Rule represents a complete adblockplus rule.
 type Rule struct {
-	Raw       string
+	// The original string representation
+	Raw string
+	// Exception is true for exclusion rules (prefixed with "@@")
 	Exception bool
-	Parts     []RulePart
-	Opts      RuleOpts
+	// Parts is the sequence of RulePart matching URLs
+	Parts []RulePart
+	// Opts are optional rules applied to content
+	Opts RuleOpts
 }
 
 var (
@@ -153,6 +201,7 @@ func (r *Rule) HasContentOpts() bool {
 		r.Opts.Stylesheet != nil
 }
 
+// ParseRule parses a single rule.
 func ParseRule(s string) (*Rule, error) {
 	r := Rule{Raw: s}
 	s = strings.TrimSpace(s)
@@ -210,6 +259,8 @@ func ParseRule(s string) (*Rule, error) {
 	return &r, nil
 }
 
+// ParseRules returns the sequence of rules extracted from supplied reader
+// content.
 func ParseRules(r io.Reader) ([]*Rule, error) {
 	rules := []*Rule{}
 	scanner := bufio.NewScanner(r)
@@ -226,15 +277,24 @@ func ParseRules(r io.Reader) ([]*Rule, error) {
 	return rules, scanner.Err()
 }
 
+// Request defines client request properties to be matched against a set
+// of rules.
 type Request struct {
-	URL          string
-	Domain       string
-	ContentType  string
+	// URL is matched against rule parts. Mandatory.
+	URL string
+	// Domain is matched against optional domain or third-party rules
+	Domain string
+	// ContentType is matched against optional content rules. This
+	// information is often available only in client responses. Filters
+	// may be applied twice, once at request time, once at response time.
+	ContentType string
+	// OriginDomain is matched against optional third-party rules.
 	OriginDomain string
 }
 
-type Matcher func(rq *Request) (bool, int)
-
+// RuleNode is the node structure of rule trees.
+// Rule trees start with a Root node containing any number of non-Root
+// RuleNodes.
 type RuleNode struct {
 	Type     int
 	Value    []byte
@@ -417,6 +477,12 @@ Port:
 	return nil, false
 }
 
+// Match evaluates a piece of a request URL against the node subtree. If it
+// matches an existing rule, returns the rule identifier and its options set.
+// Requests are evaluated by applying the nodes on its URL in DFS order. When
+// the URL is completely matched by a terminal node, a node with a non-empty
+// Opts set, the Opts are applied on the Request properties.  Any option match
+// validates the URL as a whole and the matching rule identifier is returned.
 func (n *RuleNode) Match(url []byte, rq *Request) (int, []*RuleOpts) {
 	for {
 		//fmt.Printf("matching '%s' with %s[%s][final:%v]\n",
@@ -476,16 +542,17 @@ func (n *RuleNode) Match(url []byte, rq *Request) (int, []*RuleOpts) {
 	}
 }
 
+// A RuleTree matches a set of adblockplus rules.
 type RuleTree struct {
 	root *RuleNode
 }
 
+// NewRuleTree returns a new empty RuleTree.
 func NewRuleTree() *RuleTree {
-	root := &RuleNode{
-		Type: Root,
-	}
 	return &RuleTree{
-		root: root,
+		root: &RuleNode{
+			Type: Root,
+		},
 	}
 }
 
@@ -598,6 +665,7 @@ func replaceWildcardWithSubstring(parts []RulePart) []RulePart {
 	return rewritten
 }
 
+// AddRule add a rule and its identifier to the rule tree.
 func (t *RuleTree) AddRule(rule *Rule, ruleId int) error {
 	if rule.HasOpts() {
 		return fmt.Errorf("rule options are not supported")
@@ -615,6 +683,8 @@ func (t *RuleTree) AddRule(rule *Rule, ruleId int) error {
 	return t.root.AddRule(rewritten, &rule.Opts, ruleId)
 }
 
+// Match evaluates the request. If it matches any rule, it returns the
+// rule identifier and its options.
 func (t *RuleTree) Match(rq *Request) (int, []*RuleOpts) {
 	return t.root.Match([]byte(rq.URL), rq)
 }
@@ -645,14 +715,8 @@ func (t *RuleTree) String() string {
 	return w.String()
 }
 
-func NewRuleMatcher(rules []*Rule) (*RuleTree, error) {
-	tree := NewRuleTree()
-	for _, r := range rules {
-		tree.AddRule(r, 0)
-	}
-	return tree, nil
-}
-
+// RuleMatcher implements a complete set of include and exclude AdblockPlus
+// rules.
 type RuleMatcher struct {
 	includes *RuleTree
 	excludes *RuleTree
@@ -661,6 +725,7 @@ type RuleMatcher struct {
 	contentExcludes *RuleTree
 }
 
+// NewMatcher returns a new empty matcher.
 func NewMatcher() *RuleMatcher {
 	return &RuleMatcher{
 		includes:        NewRuleTree(),
@@ -670,6 +735,8 @@ func NewMatcher() *RuleMatcher {
 	}
 }
 
+// AddRule adds a rule to the matcher. Supplied rule identifier will be
+// returned by Match().
 func (m *RuleMatcher) AddRule(rule *Rule, ruleId int) error {
 	var tree *RuleTree
 	if rule.HasContentOpts() {
@@ -688,6 +755,8 @@ func (m *RuleMatcher) AddRule(rule *Rule, ruleId int) error {
 	return tree.AddRule(rule, ruleId)
 }
 
+// Match applies include and exclude rules on supplied request. If the
+// request is accepted, it returns true and the matching rule identifier.
 func (m *RuleMatcher) Match(rq *Request) (bool, int) {
 	inc := m.includes
 	exc := m.excludes
@@ -703,6 +772,8 @@ func (m *RuleMatcher) Match(rq *Request) (bool, int) {
 	return opts == nil, id
 }
 
+// String returns a textual representation of the include and exclude rules,
+// matching request with or without content.
 func (m *RuleMatcher) String() string {
 	return fmt.Sprintf("includes:\n%s\nexcludes:\n%s\n"+
 		"content-includes:\n%s\ncontent-excludes:\n%s\n",
