@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"flag"
+	"fmt"
 	"log"
 	"mime"
 	"net"
@@ -21,6 +22,7 @@ var (
 	httpsAddr = flag.String("https", "localhost:1081", "HTTPS handler address")
 	logp      = flag.Bool("log", false, "enable logging")
 	cacheDir  = flag.String("cache", ".cache", "cache directory")
+	maxAgeArg = flag.String("max-age", "24h", "cached entries max age")
 )
 
 type FilteringHandler struct {
@@ -153,8 +155,15 @@ func (dumb dumbResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 
 func runProxy() error {
 	flag.Parse()
+	maxAge, err := time.ParseDuration(*maxAgeArg)
+	if err != nil {
+		return fmt.Errorf("invalid max-age: %s", err)
+	}
+	if maxAge < 0 {
+		return fmt.Errorf("invalid negative max-age")
+	}
 	log.Printf("loading rules")
-	cache, err := NewRuleCache(*cacheDir, flag.Args(), 24*time.Hour)
+	cache, err := NewRuleCache(*cacheDir, flag.Args(), maxAge)
 	if err != nil {
 		return err
 	}
