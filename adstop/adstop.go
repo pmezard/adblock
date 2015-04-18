@@ -33,6 +33,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -40,6 +41,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/elazarl/goproxy"
@@ -163,6 +165,54 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 	return r
 }
 
+// CACache is a goroutine-safe cache of TLS configurations mapped to hosts.
+type CACache struct {
+	cfgBuilder func(string, *goproxy.ProxyCtx) (*tls.Config, error)
+	lock       sync.Mutex
+	cache      map[string]*tls.Config
+	hit        int
+	miss       int
+}
+
+func NewCACache(ca *tls.Certificate) *CACache {
+	return &CACache{
+		cfgBuilder: goproxy.TLSConfigFromCA(ca),
+		cache:      map[string]*tls.Config{},
+	}
+}
+
+func (c *CACache) GetCA(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error) {
+	c.lock.Lock()
+	cfg := c.cache[host]
+	if cfg != nil {
+		c.hit += 1
+	} else {
+		c.miss += 1
+	}
+	hit := c.hit
+	miss := c.miss
+	c.lock.Unlock()
+
+	ctx.Warnf("signing hit/miss: %d/%d (%.1f%%)", hit, miss,
+		100.0*float64(hit)/float64(hit+miss))
+	if cfg != nil {
+		return cfg, nil
+	}
+
+	start := time.Now()
+	cfg, err := c.cfgBuilder(host, ctx)
+	if err != nil {
+		return nil, err
+	}
+	stop := time.Now()
+	ctx.Warnf("signing %s in %.0fms", host,
+		float64(stop.Sub(start))/float64(time.Millisecond))
+	c.lock.Lock()
+	c.cache[host] = cfg
+	c.lock.Unlock()
+	return cfg, nil
+}
+
 // copied/converted from https.go
 type dumbResponseWriter struct {
 	net.Conn
@@ -218,7 +268,22 @@ func runProxy() error {
 			req.URL.Host = req.Host
 			proxy.ServeHTTP(w, req)
 		})
-	proxy.OnRequest().HandleConnect(goproxy.AlwaysMitm)
+
+	// Cache MITM certificates
+	caCache := NewCACache(&goproxy.GoproxyCa)
+	MitmConnect := &goproxy.ConnectAction{
+		Action: goproxy.ConnectMitm,
+		TLSConfig: func(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error) {
+			return caCache.GetCA(host, ctx)
+		},
+	}
+	var AlwaysMitm goproxy.FuncHttpsHandler = func(host string, ctx *goproxy.ProxyCtx) (
+		*goproxy.ConnectAction, string) {
+
+		return MitmConnect, host
+	}
+	proxy.OnRequest().HandleConnect(AlwaysMitm)
+
 	proxy.OnRequest().DoFunc(h.OnRequest)
 	proxy.OnResponse().DoFunc(h.OnResponse)
 	go func() {
