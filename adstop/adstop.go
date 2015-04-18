@@ -120,6 +120,11 @@ func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
 func (h *FilteringHandler) OnResponse(r *http.Response,
 	ctx *goproxy.ProxyCtx) *http.Response {
 
+	if r == nil {
+		// Happens if RoundTrip fails
+		return r
+	}
+
 	state, ok := ctx.UserData.(*ProxyState)
 	if !ok {
 		// The request was rejected by the previous handler
