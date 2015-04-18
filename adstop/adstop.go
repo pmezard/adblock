@@ -165,11 +165,20 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 	return r
 }
 
+// CachedCA holds a certificate. It can be in different states:
+// - The certificate is being generated, CA is nil and the Ready channel is set
+// - The certificate is ready, CA is not nil and Ready is closed.
+// This mechanism is used to pool concurrent generations of the same certificate.
+type CachedCA struct {
+	CA    *tls.Config
+	Ready chan struct{}
+}
+
 // CACache is a goroutine-safe cache of TLS configurations mapped to hosts.
 type CACache struct {
 	cfgBuilder func(string, *goproxy.ProxyCtx) (*tls.Config, error)
 	lock       sync.Mutex
-	cache      map[string]*tls.Config
+	cache      map[string]CachedCA
 	hit        int
 	miss       int
 }
@@ -177,14 +186,21 @@ type CACache struct {
 func NewCACache(ca *tls.Certificate) *CACache {
 	return &CACache{
 		cfgBuilder: goproxy.TLSConfigFromCA(ca),
-		cache:      map[string]*tls.Config{},
+		cache:      map[string]CachedCA{},
 	}
 }
 
 func (c *CACache) GetCA(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error) {
 	c.lock.Lock()
-	cfg := c.cache[host]
-	if cfg != nil {
+	cfg, ok := c.cache[host]
+	if !ok {
+		// Register a CA generation event
+		cfg = CachedCA{
+			Ready: make(chan struct{}),
+		}
+		c.cache[host] = cfg
+	}
+	if ok {
 		c.hit += 1
 	} else {
 		c.miss += 1
@@ -195,22 +211,36 @@ func (c *CACache) GetCA(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error)
 
 	ctx.Warnf("signing hit/miss: %d/%d (%.1f%%)", hit, miss,
 		100.0*float64(hit)/float64(hit+miss))
-	if cfg != nil {
-		return cfg, nil
+	if ok {
+		// CA is being generated or is ready, grab it
+		<-cfg.Ready
+		ca := cfg.CA
+		if ca == nil {
+			return nil, fmt.Errorf("failed to generate TLS config for %s", host)
+		}
+		return ca, nil
 	}
 
+	// Generate it
 	start := time.Now()
-	cfg, err := c.cfgBuilder(host, ctx)
-	if err != nil {
-		return nil, err
-	}
+	ca, err := c.cfgBuilder(host, ctx)
 	stop := time.Now()
 	ctx.Warnf("signing %s in %.0fms", host,
 		float64(stop.Sub(start))/float64(time.Millisecond))
+
 	c.lock.Lock()
-	c.cache[host] = cfg
+	if err == nil {
+		c.cache[host] = CachedCA{
+			CA:    ca,
+			Ready: cfg.Ready,
+		}
+	} else {
+		delete(c.cache, host)
+		ctx.Warnf("failed to sign %s: %s", host, err)
+	}
+	close(cfg.Ready)
 	c.lock.Unlock()
-	return cfg, nil
+	return ca, err
 }
 
 // copied/converted from https.go
