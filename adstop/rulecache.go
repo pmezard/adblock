@@ -238,7 +238,8 @@ func (c *RuleCache) Rules() *RuleSet {
 				if err != nil {
 					log.Printf("update error: %s\n", err)
 				} else {
-					log.Printf("update succeeded\n")
+					log.Printf("update succeeded, next one: %s\n",
+						c.deadline.Format(time.RFC822))
 				}
 				c.matcherLock.Lock()
 				c.updating = true
