@@ -9,10 +9,18 @@ accessible as a transparent proxy. One way to achieve this is to install
 a VPN on the server side and redirect all HTTP/HTTPS traffic to the proxy
 with routing rules. Then make the client browse through the VPN.
 
+HTTPS filtering requires the proxy to intercept the device traffic and decrypt
+it. To allow this, you have to generate a certificate and add it to your
+device.
+
+You also need to generate a certificate
+
 	$ adstop -http localhost:1080 \
 		-https localhost:1081     \
 		-cache .adstop			  \
 		-max-age 24h			  \
+		-ca-cert /path/to/ca.cert \
+		-ca-key /path/to/ca.key   \
 		https://easylist-downloads.adblockplus.org/easylist.txt \
 		some_local_list.txt
 
@@ -20,13 +28,6 @@ starts the proxy and makes it listen on HTTP on port 1080, HTTPS on port 1081,
 fetch and load rules from easylist and a local file, cache easylist in an
 .adstop/ directory and refresh it every 24 hours.
 
-Note that HTTPS filtering requires the proxy to intercept the device traffic
-and decrypt it. To allow this, you have to add the proxy certificate authority
-to your device. By default, adstop uses goproxy ca.pem file but you should
-generate your own to avoid opening your device communications to third parties.
-
-TODO: configure the CA on command line to avoid recompiling goproxy with our
-own.
 */
 package main
 
@@ -36,6 +37,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"mime"
 	"net"
@@ -55,6 +57,8 @@ var (
 	logp      = flag.Bool("log", false, "enable logging")
 	cacheDir  = flag.String("cache", ".cache", "cache directory")
 	maxAgeArg = flag.String("max-age", "24h", "cached entries max age")
+	caCert    = flag.String("ca-cert", "", "path to CA certificate")
+	caKey     = flag.String("ca-key", "", "path to CA key")
 )
 
 type FilteringHandler struct {
@@ -268,8 +272,29 @@ func (dumb dumbResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return dumb, bufio.NewReadWriter(bufio.NewReader(dumb), bufio.NewWriter(dumb)), nil
 }
 
+func makeCertificate(certPath, keyPath string) (*tls.Certificate, error) {
+	cert, err := ioutil.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot load CA certificate: %s", err)
+	}
+	key, err := ioutil.ReadFile(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot load CA key: %s", err)
+	}
+	ca, err := tls.X509KeyPair(cert, key)
+	return &ca, err
+}
+
 func runProxy() error {
 	flag.Parse()
+	if *caCert == "" || *caKey == "" {
+		return fmt.Errorf("CA certificate and key must be specified")
+	}
+	ca, err := makeCertificate(*caCert, *caKey)
+	if err != nil {
+		return err
+	}
+
 	maxAge, err := time.ParseDuration(*maxAgeArg)
 	if err != nil {
 		return fmt.Errorf("invalid max-age: %s", err)
@@ -300,7 +325,7 @@ func runProxy() error {
 		})
 
 	// Cache MITM certificates
-	tlsCache := NewTLSConfigCache(&goproxy.GoproxyCa)
+	tlsCache := NewTLSConfigCache(ca)
 	MitmConnect := &goproxy.ConnectAction{
 		Action: goproxy.ConnectMitm,
 		TLSConfig: func(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error) {
