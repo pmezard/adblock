@@ -165,40 +165,40 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 	return r
 }
 
-// CachedCA holds a certificate. It can be in different states:
-// - The certificate is being generated, CA is nil and the Ready channel is set
-// - The certificate is ready, CA is not nil and Ready is closed.
+// CachedConfig holds a TLS configuration. It can be in different states:
+// - The config is being generated, Config is nil and the Ready channel is set
+// - The config is ready, Config is not nil and Ready is closed.
 // This mechanism is used to pool concurrent generations of the same certificate.
-type CachedCA struct {
-	CA    *tls.Config
-	Ready chan struct{}
+type CachedConfig struct {
+	Config *tls.Config
+	Ready  chan struct{}
 }
 
-// CACache is a goroutine-safe cache of TLS configurations mapped to hosts.
-type CACache struct {
+// TLSConfigCache is a goroutine-safe cache of TLS configurations mapped to hosts.
+type TLSConfigCache struct {
 	cfgBuilder func(string, *goproxy.ProxyCtx) (*tls.Config, error)
 	lock       sync.Mutex
-	cache      map[string]CachedCA
+	cache      map[string]CachedConfig
 	hit        int
 	miss       int
 }
 
-func NewCACache(ca *tls.Certificate) *CACache {
-	return &CACache{
+func NewTLSConfigCache(ca *tls.Certificate) *TLSConfigCache {
+	return &TLSConfigCache{
 		cfgBuilder: goproxy.TLSConfigFromCA(ca),
-		cache:      map[string]CachedCA{},
+		cache:      map[string]CachedConfig{},
 	}
 }
 
-func (c *CACache) GetCA(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error) {
+func (c *TLSConfigCache) GetConfig(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error) {
 	c.lock.Lock()
-	cfg, ok := c.cache[host]
+	cached, ok := c.cache[host]
 	if !ok {
-		// Register a CA generation event
-		cfg = CachedCA{
+		// Register a config generation event
+		cached = CachedConfig{
 			Ready: make(chan struct{}),
 		}
-		c.cache[host] = cfg
+		c.cache[host] = cached
 	}
 	if ok {
 		c.hit += 1
@@ -212,35 +212,35 @@ func (c *CACache) GetCA(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error)
 	ctx.Warnf("signing hit/miss: %d/%d (%.1f%%)", hit, miss,
 		100.0*float64(hit)/float64(hit+miss))
 	if ok {
-		// CA is being generated or is ready, grab it
-		<-cfg.Ready
-		ca := cfg.CA
-		if ca == nil {
+		// config is being generated or is ready, grab it
+		<-cached.Ready
+		cfg := cached.Config
+		if cfg == nil {
 			return nil, fmt.Errorf("failed to generate TLS config for %s", host)
 		}
-		return ca, nil
+		return cfg, nil
 	}
 
 	// Generate it
 	start := time.Now()
-	ca, err := c.cfgBuilder(host, ctx)
+	cfg, err := c.cfgBuilder(host, ctx)
 	stop := time.Now()
 	ctx.Warnf("signing %s in %.0fms", host,
 		float64(stop.Sub(start))/float64(time.Millisecond))
 
 	c.lock.Lock()
 	if err == nil {
-		c.cache[host] = CachedCA{
-			CA:    ca,
-			Ready: cfg.Ready,
+		c.cache[host] = CachedConfig{
+			Config: cfg,
+			Ready:  cached.Ready,
 		}
 	} else {
 		delete(c.cache, host)
 		ctx.Warnf("failed to sign %s: %s", host, err)
 	}
-	close(cfg.Ready)
+	close(cached.Ready)
 	c.lock.Unlock()
-	return ca, err
+	return cfg, err
 }
 
 // copied/converted from https.go
@@ -300,11 +300,11 @@ func runProxy() error {
 		})
 
 	// Cache MITM certificates
-	caCache := NewCACache(&goproxy.GoproxyCa)
+	tlsCache := NewTLSConfigCache(&goproxy.GoproxyCa)
 	MitmConnect := &goproxy.ConnectAction{
 		Action: goproxy.ConnectMitm,
 		TLSConfig: func(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error) {
-			return caCache.GetCA(host, ctx)
+			return tlsCache.GetConfig(host, ctx)
 		},
 	}
 	var AlwaysMitm goproxy.FuncHttpsHandler = func(host string, ctx *goproxy.ProxyCtx) (
