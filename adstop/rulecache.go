@@ -242,7 +242,7 @@ func (c *RuleCache) Rules() *RuleSet {
 						c.deadline.Format(time.RFC822))
 				}
 				c.matcherLock.Lock()
-				c.updating = true
+				c.updating = false
 				c.matcherLock.Unlock()
 			}()
 		}
