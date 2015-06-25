@@ -43,6 +43,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -194,7 +195,21 @@ func NewTLSConfigCache(ca *tls.Certificate) *TLSConfigCache {
 	}
 }
 
+func getWildcardHost(host string) string {
+	first := strings.Index(host, ".")
+	if first <= 0 {
+		return host
+	}
+	last := strings.LastIndex(host, ".")
+	if last == first {
+		// root domain, no wildcard
+		return host
+	}
+	return "*" + host[first:]
+}
+
 func (c *TLSConfigCache) GetConfig(host string, ctx *goproxy.ProxyCtx) (*tls.Config, error) {
+	host = getWildcardHost(host)
 	c.lock.Lock()
 	cached, ok := c.cache[host]
 	if !ok {
