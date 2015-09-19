@@ -104,10 +104,6 @@ type ProxyState struct {
 func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
 	*http.Request, *http.Response) {
 
-	if atomic.LoadUint64(logRequests)%2 == 1 {
-		logRequest(r)
-	}
-
 	host := r.URL.Host
 	if host == "" {
 		host = r.Host
@@ -150,10 +146,6 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 		return r
 	}
 
-	if atomic.LoadUint64(logRequests)%2 == 1 {
-		logResponse(r)
-	}
-
 	duration2 := time.Duration(0)
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err == nil && len(mediaType) > 0 {
@@ -182,6 +174,11 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 			return goproxy.NewResponse(ctx.Req, goproxy.ContentTypeText,
 				http.StatusNotFound, "Not Found")
 		}
+	}
+
+	if atomic.LoadUint64(logRequests)%2 == 1 {
+		logRequest(ctx.Req)
+		logResponse(r)
 	}
 	log.Printf("accepted in %d/%dms: %s\n", state.Duration, duration2, state.URL)
 	return r
