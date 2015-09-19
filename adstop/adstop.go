@@ -42,6 +42,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"net/url"
 	"strings"
 	"sync"
@@ -55,6 +56,7 @@ import (
 var (
 	httpAddr  = flag.String("http", "localhost:1080", "HTTP handler address")
 	httpsAddr = flag.String("https", "localhost:1081", "HTTPS handler address")
+	httpDebug = flag.String("debug-addr", "", "HTTP debug address")
 	logp      = flag.Bool("log", false, "enable logging")
 	cacheDir  = flag.String("cache", ".cache", "cache directory")
 	maxAgeArg = flag.String("max-age", "24h", "cached entries max age")
@@ -324,6 +326,13 @@ func runProxy() error {
 	}
 	h := &FilteringHandler{
 		Cache: cache,
+	}
+
+	if *httpDebug != "" {
+		log.Printf("starting debug server on %s", *httpDebug)
+		go func() {
+			log.Println(http.ListenAndServe(*httpDebug, nil))
+		}()
 	}
 
 	log.Printf("starting servers")
