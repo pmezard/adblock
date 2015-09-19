@@ -46,6 +46,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elazarl/goproxy"
@@ -54,14 +55,14 @@ import (
 )
 
 var (
-	httpAddr  = flag.String("http", "localhost:1080", "HTTP handler address")
-	httpsAddr = flag.String("https", "localhost:1081", "HTTPS handler address")
-	httpDebug = flag.String("debug-addr", "", "HTTP debug address")
-	logp      = flag.Bool("log", false, "enable logging")
-	cacheDir  = flag.String("cache", ".cache", "cache directory")
-	maxAgeArg = flag.String("max-age", "24h", "cached entries max age")
-	caCert    = flag.String("ca-cert", "", "path to CA certificate")
-	caKey     = flag.String("ca-key", "", "path to CA key")
+	httpAddr    = flag.String("http", "localhost:1080", "HTTP handler address")
+	httpsAddr   = flag.String("https", "localhost:1081", "HTTPS handler address")
+	httpDebug   = flag.String("debug-addr", "", "HTTP debug address")
+	logRequests = flag.Uint64("log", 0, "enable logging")
+	cacheDir    = flag.String("cache", ".cache", "cache directory")
+	maxAgeArg   = flag.String("max-age", "24h", "cached entries max age")
+	caCert      = flag.String("ca-cert", "", "path to CA certificate")
+	caKey       = flag.String("ca-key", "", "path to CA key")
 )
 
 type FilteringHandler struct {
@@ -69,10 +70,19 @@ type FilteringHandler struct {
 }
 
 func logRequest(r *http.Request) {
-	log.Printf("%s %s %s %s\n", r.Proto, r.Method, r.URL, r.Host)
 	buf := &bytes.Buffer{}
+	fmt.Fprintf(buf, "REQ\n<REQUEST\n%s %s %s %s\n", r.Proto, r.Method, r.URL, r.Host)
 	r.Header.Write(buf)
-	log.Println(string(buf.Bytes()))
+	fmt.Fprintf(buf, "REQUEST>\n")
+	log.Println(buf.String())
+}
+
+func logResponse(r *http.Response) {
+	buf := &bytes.Buffer{}
+	fmt.Fprintf(buf, "RSP\n<RESPONSE\n%s %s\n", r.Proto, r.Status)
+	r.Header.Write(buf)
+	fmt.Fprintf(buf, "RESPONSE>\n")
+	log.Println(buf.String())
 }
 
 func getReferrerDomain(r *http.Request) string {
@@ -94,7 +104,7 @@ type ProxyState struct {
 func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
 	*http.Request, *http.Response) {
 
-	if *logp {
+	if atomic.LoadUint64(logRequests)%2 == 1 {
 		logRequest(r)
 	}
 
@@ -139,6 +149,11 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 		// The request was rejected by the previous handler
 		return r
 	}
+
+	if atomic.LoadUint64(logRequests)%2 == 1 {
+		logResponse(r)
+	}
+
 	duration2 := time.Duration(0)
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err == nil && len(mediaType) > 0 {
@@ -302,6 +317,18 @@ func makeCertificate(certPath, keyPath string) (*tls.Certificate, error) {
 	return &ca, err
 }
 
+func runDebugServer(addr string) error {
+	http.HandleFunc("/trace", func(w http.ResponseWriter, r *http.Request) {
+		res := atomic.AddUint64(logRequests, 1)
+		action := "logging requests"
+		if res%2 == 0 {
+			action = "ignoring requests"
+		}
+		fmt.Fprintf(w, "%s\n", action)
+	})
+	return http.ListenAndServe(addr, nil)
+}
+
 func runProxy() error {
 	flag.Parse()
 	if *caCert == "" || *caKey == "" {
@@ -331,7 +358,7 @@ func runProxy() error {
 	if *httpDebug != "" {
 		log.Printf("starting debug server on %s", *httpDebug)
 		go func() {
-			log.Println(http.ListenAndServe(*httpDebug, nil))
+			log.Println(runDebugServer(*httpDebug))
 		}()
 	}
 
