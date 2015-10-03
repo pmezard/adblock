@@ -433,6 +433,8 @@ func runProxy() error {
 
 	proxy.OnRequest().DoFunc(h.OnRequest)
 	proxy.OnResponse().DoFunc(h.OnResponse)
+
+	done := make(chan error)
 	go func() {
 		server := http.Server{
 			Addr:         *httpAddr,
@@ -440,13 +442,14 @@ func runProxy() error {
 			ReadTimeout:  timeout,
 			WriteTimeout: timeout,
 		}
-		err := server.ListenAndServe()
-		if err != nil {
-			log.Fatalf("http listener failed: %s", err)
-		}
+		done <- server.ListenAndServe()
 	}()
 
-	return listenTransparentTLS(proxy, *httpsAddr, timeout)
+	go func() {
+		done <- listenTransparentTLS(proxy, *httpsAddr, timeout)
+	}()
+
+	return <-done
 }
 
 func main() {
