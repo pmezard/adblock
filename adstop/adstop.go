@@ -327,6 +327,45 @@ func runDebugServer(addr string) error {
 	return http.ListenAndServe(addr, nil)
 }
 
+func listenTransparentTLS(proxy *goproxy.ProxyHttpServer, addr string,
+	timeout time.Duration) error {
+
+	// listen to the TLS ClientHello but make it a CONNECT request instead
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			log.Printf("error accepting new connection - %v", err)
+			continue
+		}
+		go func(c net.Conn) {
+			c.SetDeadline(time.Now().Add(timeout))
+			tlsConn, err := vhost.TLS(c)
+			if err != nil {
+				log.Printf("error accepting new connection - %v", err)
+			}
+			if tlsConn.Host() == "" {
+				log.Printf("cannot support non-SNI enabled clients")
+				return
+			}
+			connectReq := &http.Request{
+				Method: "CONNECT",
+				URL: &url.URL{
+					Opaque: tlsConn.Host(),
+					Host:   net.JoinHostPort(tlsConn.Host(), "443"),
+				},
+				Host:   tlsConn.Host(),
+				Header: make(http.Header),
+			}
+			resp := dumbResponseWriter{tlsConn}
+			proxy.ServeHTTP(resp, connectReq)
+		}(c)
+	}
+}
+
 func runProxy() error {
 	flag.Parse()
 	timeout, err := time.ParseDuration(*timeoutStr)
@@ -407,40 +446,7 @@ func runProxy() error {
 		}
 	}()
 
-	// listen to the TLS ClientHello but make it a CONNECT request instead
-	ln, err := net.Listen("tcp", *httpsAddr)
-	if err != nil {
-		return err
-	}
-	for {
-		c, err := ln.Accept()
-		if err != nil {
-			log.Printf("error accepting new connection - %v", err)
-			continue
-		}
-		go func(c net.Conn) {
-			c.SetDeadline(time.Now().Add(timeout))
-			tlsConn, err := vhost.TLS(c)
-			if err != nil {
-				log.Printf("error accepting new connection - %v", err)
-			}
-			if tlsConn.Host() == "" {
-				log.Printf("cannot support non-SNI enabled clients")
-				return
-			}
-			connectReq := &http.Request{
-				Method: "CONNECT",
-				URL: &url.URL{
-					Opaque: tlsConn.Host(),
-					Host:   net.JoinHostPort(tlsConn.Host(), "443"),
-				},
-				Host:   tlsConn.Host(),
-				Header: make(http.Header),
-			}
-			resp := dumbResponseWriter{tlsConn}
-			proxy.ServeHTTP(resp, connectReq)
-		}(c)
-	}
+	return listenTransparentTLS(proxy, *httpsAddr, timeout)
 }
 
 func main() {
