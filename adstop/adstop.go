@@ -55,6 +55,7 @@ import (
 )
 
 var (
+	timeoutStr  = flag.String("timeout", "5m", "HTTP/TCP connections global timeout")
 	httpAddr    = flag.String("http", "localhost:1080", "HTTP handler address")
 	httpsAddr   = flag.String("https", "localhost:1081", "HTTPS handler address")
 	httpDebug   = flag.String("debug-addr", "", "HTTP debug address")
@@ -328,6 +329,10 @@ func runDebugServer(addr string) error {
 
 func runProxy() error {
 	flag.Parse()
+	timeout, err := time.ParseDuration(*timeoutStr)
+	if err != nil {
+		return fmt.Errorf("could not parse timeout %s: %s", *timeoutStr, err)
+	}
 	if *caCert == "" || *caKey == "" {
 		return fmt.Errorf("CA certificate and key must be specified")
 	}
@@ -390,7 +395,16 @@ func runProxy() error {
 	proxy.OnRequest().DoFunc(h.OnRequest)
 	proxy.OnResponse().DoFunc(h.OnResponse)
 	go func() {
-		http.ListenAndServe(*httpAddr, proxy)
+		server := http.Server{
+			Addr:         *httpAddr,
+			Handler:      proxy,
+			ReadTimeout:  timeout,
+			WriteTimeout: timeout,
+		}
+		err := server.ListenAndServe()
+		if err != nil {
+			log.Fatalf("http listener failed: %s", err)
+		}
 	}()
 
 	// listen to the TLS ClientHello but make it a CONNECT request instead
@@ -405,6 +419,7 @@ func runProxy() error {
 			continue
 		}
 		go func(c net.Conn) {
+			c.SetDeadline(time.Now().Add(timeout))
 			tlsConn, err := vhost.TLS(c)
 			if err != nil {
 				log.Printf("error accepting new connection - %v", err)
