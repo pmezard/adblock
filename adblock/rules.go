@@ -93,6 +93,7 @@ type RuleOpts struct {
 	Document         bool
 	Domains          []string
 	ElemHide         bool
+	Font             *bool
 	Image            *bool
 	Media            *bool
 	Object           *bool
@@ -153,6 +154,8 @@ func NewRuleOpts(s string) (RuleOpts, error) {
 			opts.Popup = &value
 		case opt == "collapse":
 			opts.Collapse = &value
+		case opt == "font":
+			opts.Font = &value
 		default:
 			return opts, fmt.Errorf("unknown rule option: %s", opt)
 		}
@@ -198,7 +201,8 @@ func (r *Rule) HasContentOpts() bool {
 	return r.Opts.Image != nil ||
 		r.Opts.Object != nil ||
 		r.Opts.Script != nil ||
-		r.Opts.Stylesheet != nil
+		r.Opts.Stylesheet != nil ||
+		r.Opts.Font != nil
 }
 
 // ParseRule parses a single rule.
@@ -386,6 +390,12 @@ func matchOptsContent(opts *RuleOpts, contentType string) bool {
 	if opts.Stylesheet != nil {
 		isStylesheet := strings.Contains(contentType, "css")
 		if isStylesheet != *opts.Stylesheet {
+			return false
+		}
+	}
+	if opts.Font != nil {
+		isFont := strings.Contains(contentType, "font")
+		if isFont != *opts.Font {
 			return false
 		}
 	}

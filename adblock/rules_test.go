@@ -171,6 +171,7 @@ func TestOptsContent(t *testing.T) {
 	testInputs(t, `
 /img$image
 /notimg$~image
+/webfont$font
 `,
 		[]TestInput{
 			{URL: "http://foo.com/img", Matched: false},
@@ -179,6 +180,8 @@ func TestOptsContent(t *testing.T) {
 			{URL: "http://foo.com/notimg", Matched: false},
 			{URL: "http://foo.com/notimg", Matched: false, ContentType: "image/png"},
 			{URL: "http://foo.com/notimg", Matched: true, ContentType: "text/plain"},
+			{URL: "http://foo.com/webfont", Matched: true, ContentType: "font/opentype"},
+			{URL: "http://foo.com/webfont", Matched: false, ContentType: "image/png"},
 		})
 }
 
