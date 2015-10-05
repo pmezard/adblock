@@ -13,8 +13,6 @@ HTTPS filtering requires the proxy to intercept the device traffic and decrypt
 it. To allow this, you have to generate a certificate and add it to your
 device.
 
-You also need to generate a certificate
-
 	$ adstop -http localhost:1080 \
 		-https localhost:1081     \
 		-cache .adstop			  \
