@@ -39,3 +39,26 @@ starts the proxy and makes it listen on HTTP on port 1080, HTTPS on port 1081,
 fetch and load rules from easylist and a local file, cache easylist in an
 .adstop/ directory and refresh it every 24 hours.
 
+### How does it work?
+
+adstop monitors HTTP/HTTPS requests and responses and if one of these matches a
+filter, it returns a 404 error to the client. It does not modify response
+bodies. Rules without options or which options are not based on returned data
+are applied on requests, the others on responses.
+
+The difficult part is to apply Adblock rules. They were designed to operate in
+a web browser and were assumed to have access to a lot more of information than
+a simple web proxy has. adstop supports only a subset of available rules:
+- Rules without options (`"$..."` suffix) are completely supported
+- The following options are supported:
+  * `domain=foo.com|bar.com|~baz.com`
+  * `font`, `image`, `objects`, `script`, `stylesheet` are roughly approximated
+    using Content-Type.
+  * `thirdparty` is approximated with the Referrer header.
+- The following options are not-supported, and related rules are discared:
+  * `document`
+  * `media`
+  * `popup`
+- Element hiding rules are ignored.
+- Other options are ignored and rules applied without them.
+
