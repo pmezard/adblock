@@ -18,6 +18,7 @@ import (
 
 func check() error {
 	verbose := flag.Bool("v", false, "print rejected rules")
+	dump := flag.Bool("dump", false, "print parsed rules")
 	flag.Parse()
 	args := flag.Args()
 	if len(args) != 1 {
@@ -53,7 +54,9 @@ func check() error {
 	if !ok {
 		return fmt.Errorf("some rules could not be parsed")
 	}
-	fmt.Printf("%s\n", rules)
+	if *dump {
+		fmt.Printf("%s\n", rules)
+	}
 	return nil
 }
 
