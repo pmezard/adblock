@@ -199,7 +199,7 @@ func TestOptsThirdParty(t *testing.T) {
 }
 
 func BenchmarkSlowMatching(b *testing.B) {
-	m, added, err := loadMatcher("testdata/easylist.txt")
+	m, added, err := loadMatcher("testdata/easylist-20141019.txt")
 	if err != nil {
 		b.Fatal(err)
 	}
