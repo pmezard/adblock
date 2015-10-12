@@ -35,10 +35,6 @@ var (
 	caKey       = flag.String("ca-key", "", "path to CA key")
 )
 
-type FilteringHandler struct {
-	Cache *RuleCache
-}
-
 func logRequest(r *http.Request) {
 	buf := &bytes.Buffer{}
 	fmt.Fprintf(buf, "REQ\n<REQUEST\n%s %s %s %s\n", r.Proto, r.Method, r.URL, r.Host)
@@ -66,9 +62,100 @@ func getReferrerDomain(r *http.Request) string {
 	return ""
 }
 
+// SlowMatchesTracker tracks matching requests and aborts the process if one of
+// them takes more than a specified duration to finish.
+type SlowMatchesTracker struct {
+	lock        sync.Mutex
+	running     map[*adblock.Request]time.Time
+	stop        chan bool
+	jobs        sync.WaitGroup
+	maxDuration time.Duration
+}
+
+func NewSlowMatchesTracker() *SlowMatchesTracker {
+	t := &SlowMatchesTracker{
+		running:     map[*adblock.Request]time.Time{},
+		stop:        make(chan bool),
+		maxDuration: 20 * time.Second,
+	}
+	go t.scan()
+	return t
+}
+
+func (t *SlowMatchesTracker) Close() {
+	close(t.stop)
+	t.jobs.Wait()
+}
+
+func (t *SlowMatchesTracker) AddMatch(rq *adblock.Request) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	t.running[rq] = time.Now().Add(t.maxDuration)
+}
+
+func (t *SlowMatchesTracker) RemoveMatch(rq *adblock.Request) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	now := time.Now()
+	deadline, ok := t.running[rq]
+	if ok && now.After(deadline) {
+		t.abort(now, deadline, rq)
+	}
+	delete(t.running, rq)
+}
+
+func (t *SlowMatchesTracker) Match(rules *adblock.RuleMatcher, rq *adblock.Request) (
+	bool, int) {
+
+	t.AddMatch(rq)
+	defer t.RemoveMatch(rq)
+	return rules.Match(rq)
+}
+
+func (t *SlowMatchesTracker) scanOnce() {
+	now := time.Now()
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	removed := []*adblock.Request{}
+	for rq, deadline := range t.running {
+		if !now.After(deadline) {
+			continue
+		}
+		removed = append(removed, rq)
+	}
+	for _, rq := range removed {
+		deadline := t.running[rq]
+		delete(t.running, rq)
+		t.abort(now, deadline, rq)
+	}
+}
+
+func (t *SlowMatchesTracker) abort(now, deadline time.Time, rq *adblock.Request) {
+	d := float64(now.Sub(deadline)+t.maxDuration) / float64(time.Second)
+	log.Fatalf("warning: request took at least %.2fs: %+v", d, *rq)
+}
+
+func (t *SlowMatchesTracker) scan() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-t.stop:
+			return
+		case <-ticker.C:
+			t.scanOnce()
+		}
+	}
+}
+
 type ProxyState struct {
 	Duration time.Duration
 	URL      string
+}
+
+type FilteringHandler struct {
+	Cache   *RuleCache
+	Tracker *SlowMatchesTracker
 }
 
 func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
@@ -85,7 +172,7 @@ func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
 	}
 	rules := h.Cache.Rules()
 	start := time.Now()
-	matched, id := rules.Matcher.Match(rq)
+	matched, id := h.Tracker.Match(rules.Matcher, rq)
 	end := time.Now()
 	duration := end.Sub(start) / time.Millisecond
 	if matched {
@@ -132,7 +219,7 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 		// Second level filtering, based on returned content
 		rules := h.Cache.Rules()
 		start := time.Now()
-		matched, id := rules.Matcher.Match(rq)
+		matched, id := h.Tracker.Match(rules.Matcher, rq)
 		end := time.Now()
 		duration2 = end.Sub(start) / time.Millisecond
 		if matched {
@@ -361,8 +448,11 @@ func runProxy() error {
 	if err != nil {
 		return err
 	}
+	tracker := NewSlowMatchesTracker()
+	defer tracker.Close()
 	h := &FilteringHandler{
-		Cache: cache,
+		Cache:   cache,
+		Tracker: tracker,
 	}
 
 	if *httpDebug != "" {
