@@ -27,8 +27,12 @@ To match HTTP requests:
 		Domain: host,
 		// possibly fill OriginDomain from Referrer header
 		// and ContentType from HTTP response Content-Type.
+		Timeout: 200 * time.Millisecond,
 	}
-	matched, id := matcher.Match(rq)
+	matched, id, err := matcher.Match(rq)
+	if err != nil {
+		...
+	}
 	if matched {
 		// Use the rule identifier to print which rules was matched
 	}
@@ -43,6 +47,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const (
@@ -295,6 +300,10 @@ type Request struct {
 	ContentType string
 	// OriginDomain is matched against optional third-party rules.
 	OriginDomain string
+
+	// Timeout is the maximum amount of time a single matching can take.
+	Timeout   time.Duration
+	CheckFreq int
 }
 
 // RuleNode is the node structure of rule trees.
@@ -306,6 +315,18 @@ type ruleNode struct {
 	Opts     []*RuleOpts // non-empty on terminating nodes
 	Children []*ruleNode
 	RuleId   int
+}
+
+// GetValue returns the node representation. It may differ from Value field
+// for composite nodes like Sustring.
+func (n *ruleNode) GetValue() string {
+	v := n.Value
+	if n.Type == Substring {
+		v = make([]byte, 1+len(n.Value))
+		v[0] = '*'
+		copy(v[1:], n.Value)
+	}
+	return string(v)
 }
 
 func (n *ruleNode) AddRule(parts []RulePart, opts *RuleOpts, id int) error {
@@ -412,7 +433,44 @@ func matchOptsThirdParty(opts *RuleOpts, origin, domain string) bool {
 	return isSubdomain != *opts.ThirdParty
 }
 
-func (n *ruleNode) matchChildren(url []byte, rq *Request) (int, []*RuleOpts) {
+// matchContext is forwarded to matching functions which call Continue(). The
+// current match duration is sampled and the call aborted if it exceeds a
+// timeout.
+// On failed calls, location is set to the node terminating the match and
+// duration is updated to the original duration plus the time exceeding the
+// deadline.
+type matchContext struct {
+	counter  int
+	freq     int
+	duration time.Duration
+	deadline time.Time
+	location *ruleNode
+}
+
+func (ctx *matchContext) Continue(n *ruleNode) bool {
+	if ctx.freq <= 0 {
+		return true
+	}
+	ctx.counter += 1
+	if ctx.counter < ctx.freq {
+		return true
+	}
+	ctx.counter = 0
+	now := time.Now()
+	stop := now.After(ctx.deadline)
+	if stop {
+		ctx.location = n
+		ctx.duration += now.Sub(ctx.deadline)
+	}
+	return !stop
+}
+
+func (n *ruleNode) matchChildren(ctx *matchContext, url []byte, rq *Request) (
+	int, []*RuleOpts) {
+
+	if !ctx.Continue(n) {
+		return -1, nil
+	}
 	if len(url) == 0 && len(n.Children) == 0 {
 		for _, opt := range n.Opts {
 			if !matchOptsDomains(opt, rq.Domain) {
@@ -429,8 +487,8 @@ func (n *ruleNode) matchChildren(url []byte, rq *Request) (int, []*RuleOpts) {
 	}
 	// If there are children they have to match
 	for _, c := range n.Children {
-		ruleId, opts := c.Match(url, rq)
-		if opts != nil {
+		ruleId, opts := c.dispatch(ctx, url, rq)
+		if opts != nil || ruleId < 0 {
 			return ruleId, opts
 		}
 	}
@@ -488,13 +546,9 @@ Port:
 	return nil, false
 }
 
-// Match evaluates a piece of a request URL against the node subtree. If it
-// matches an existing rule, returns the rule identifier and its options set.
-// Requests are evaluated by applying the nodes on its URL in DFS order. When
-// the URL is completely matched by a terminal node, a node with a non-empty
-// Opts set, the Opts are applied on the Request properties.  Any option match
-// validates the URL as a whole and the matching rule identifier is returned.
-func (n *ruleNode) Match(url []byte, rq *Request) (int, []*RuleOpts) {
+func (n *ruleNode) dispatch(ctx *matchContext, url []byte, rq *Request) (
+	int, []*RuleOpts) {
+
 	for {
 		//fmt.Printf("matching '%s' with %s[%s][final:%v]\n",
 		//	string(url), getPartName(n.Type), string(n.Value), n.Opts != nil)
@@ -504,35 +558,35 @@ func (n *ruleNode) Match(url []byte, rq *Request) (int, []*RuleOpts) {
 				return 0, nil
 			}
 			url = url[len(n.Value):]
-			return n.matchChildren(url, rq)
+			return n.matchChildren(ctx, url, rq)
 		case Separator:
 			m := reSeparator.FindSubmatch(url)
 			if m == nil {
 				return 0, nil
 			}
 			url = url[len(m[0]):]
-			return n.matchChildren(url, rq)
+			return n.matchChildren(ctx, url, rq)
 		case Wildcard:
 			if len(n.Children) == 0 {
 				// Fast-path trailing wildcards
-				return n.matchChildren(nil, rq)
+				return n.matchChildren(ctx, nil, rq)
 			}
 			if len(url) == 0 {
-				return n.matchChildren(url, rq)
+				return n.matchChildren(ctx, url, rq)
 			}
 			for i := 0; i < len(url); i++ {
-				ruleId, opts := n.matchChildren(url[i:], rq)
-				if opts != nil {
+				ruleId, opts := n.matchChildren(ctx, url[i:], rq)
+				if opts != nil || ruleId < 0 {
 					return ruleId, opts
 				}
 			}
 		case DomainAnchor:
 			remaining, ok := matchDomainAnchor(url, n.Value)
 			if ok {
-				return n.matchChildren(remaining, rq)
+				return n.matchChildren(ctx, remaining, rq)
 			}
 		case Root:
-			return n.matchChildren(url, rq)
+			return n.matchChildren(ctx, url, rq)
 		case Substring:
 			for {
 				if len(url) == 0 {
@@ -543,14 +597,70 @@ func (n *ruleNode) Match(url []byte, rq *Request) (int, []*RuleOpts) {
 					break
 				}
 				url = url[pos+len(n.Value):]
-				ruleId, opts := n.matchChildren(url, rq)
-				if opts != nil {
+				ruleId, opts := n.matchChildren(ctx, url, rq)
+				if opts != nil || ruleId < 0 {
 					return ruleId, opts
 				}
 			}
 		}
 		return 0, nil
 	}
+}
+
+// findNodePath returns the partial string represention of target and its
+// ancestors in n subtree.
+func findNodePath(target *ruleNode, n *ruleNode) (string, bool) {
+	if target == n {
+		return n.GetValue(), true
+	}
+	for _, c := range n.Children {
+		s, ok := findNodePath(target, c)
+		if ok {
+			return n.GetValue() + s, true
+		}
+	}
+	return "", false
+}
+
+type InterruptedError struct {
+	Duration time.Duration
+	Rule     string
+}
+
+func (e *InterruptedError) Error() string {
+	return fmt.Sprintf("interrupted at %s after %.3s", e.Rule, e.Duration)
+}
+
+// Match evaluates a piece of a request URL against the node subtree. If it
+// matches an existing rule, returns the rule identifier and its options set.
+// Requests are evaluated by applying the nodes on its URL in DFS order. When
+// the URL is completely matched by a terminal node, a node with a non-empty
+// Opts set, the Opts are applied on the Request properties.  Any option match
+// validates the URL as a whole and the matching rule identifier is returned.
+// If the request timeout is set and exceeded, InterruptedError is returned.
+func (n *ruleNode) Match(url []byte, rq *Request) (int, []*RuleOpts, error) {
+	ctx := &matchContext{
+		freq:     rq.CheckFreq,
+		duration: rq.Timeout,
+	}
+	if rq.Timeout > 0 {
+		ctx.deadline = time.Now().Add(rq.Timeout)
+		if ctx.freq == 0 {
+			ctx.freq = 1000
+		}
+	}
+	id, ops := n.dispatch(ctx, url, rq)
+	if ctx.location != nil {
+		rule, ok := findNodePath(ctx.location, n)
+		if !ok {
+			panic("could not find node in rule tree")
+		}
+		return id, ops, &InterruptedError{
+			Duration: ctx.duration,
+			Rule:     rule,
+		}
+	}
+	return id, ops, nil
 }
 
 // A RuleTree matches a set of adblockplus rules.
@@ -696,7 +806,7 @@ func (t *ruleTree) AddRule(rule *Rule, ruleId int) error {
 
 // Match evaluates the request. If it matches any rule, it returns the
 // rule identifier and its options.
-func (t *ruleTree) Match(rq *Request) (int, []*RuleOpts) {
+func (t *ruleTree) Match(rq *Request) (int, []*RuleOpts, error) {
 	return t.root.Match([]byte(rq.URL), rq)
 }
 
@@ -768,19 +878,19 @@ func (m *RuleMatcher) AddRule(rule *Rule, ruleId int) error {
 
 // Match applies include and exclude rules on supplied request. If the
 // request is accepted, it returns true and the matching rule identifier.
-func (m *RuleMatcher) Match(rq *Request) (bool, int) {
+func (m *RuleMatcher) Match(rq *Request) (bool, int, error) {
 	inc := m.includes
 	exc := m.excludes
 	if len(rq.ContentType) > 0 {
 		inc = m.contentIncludes
 		exc = m.contentExcludes
 	}
-	id, opts := inc.Match(rq)
-	if opts == nil {
-		return false, 0
+	id, opts, err := inc.Match(rq)
+	if opts == nil || err != nil {
+		return false, 0, err
 	}
-	_, opts = exc.Match(rq)
-	return opts == nil, id
+	_, opts, err = exc.Match(rq)
+	return opts == nil, id, err
 }
 
 // String returns a textual representation of the include and exclude rules,

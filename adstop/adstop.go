@@ -24,15 +24,16 @@ import (
 )
 
 var (
-	timeoutStr  = flag.String("timeout", "5m", "HTTP/TCP connections global timeout")
-	httpAddr    = flag.String("http", "localhost:1080", "HTTP handler address")
-	httpsAddr   = flag.String("https", "localhost:1081", "HTTPS handler address")
-	httpDebug   = flag.String("debug-addr", "", "HTTP debug address")
-	logRequests = flag.Uint64("log", 0, "enable logging")
-	cacheDir    = flag.String("cache", ".cache", "cache directory")
-	maxAgeArg   = flag.String("max-age", "24h", "cached entries max age")
-	caCert      = flag.String("ca-cert", "", "path to CA certificate")
-	caKey       = flag.String("ca-key", "", "path to CA key")
+	timeoutStr      = flag.String("timeout", "5m", "HTTP/TCP connections global timeout")
+	matchTimeoutStr = flag.String("match-timeout", "1s", "request matching timeout")
+	httpAddr        = flag.String("http", "localhost:1080", "HTTP handler address")
+	httpsAddr       = flag.String("https", "localhost:1081", "HTTPS handler address")
+	httpDebug       = flag.String("debug-addr", "", "HTTP debug address")
+	logRequests     = flag.Uint64("log", 0, "enable logging")
+	cacheDir        = flag.String("cache", ".cache", "cache directory")
+	maxAgeArg       = flag.String("max-age", "24h", "cached entries max age")
+	caCert          = flag.String("ca-cert", "", "path to CA certificate")
+	caKey           = flag.String("ca-key", "", "path to CA key")
 )
 
 func logRequest(r *http.Request) {
@@ -62,100 +63,14 @@ func getReferrerDomain(r *http.Request) string {
 	return ""
 }
 
-// SlowMatchesTracker tracks matching requests and aborts the process if one of
-// them takes more than a specified duration to finish.
-type SlowMatchesTracker struct {
-	lock        sync.Mutex
-	running     map[*adblock.Request]time.Time
-	stop        chan bool
-	jobs        sync.WaitGroup
-	maxDuration time.Duration
-}
-
-func NewSlowMatchesTracker() *SlowMatchesTracker {
-	t := &SlowMatchesTracker{
-		running:     map[*adblock.Request]time.Time{},
-		stop:        make(chan bool),
-		maxDuration: 20 * time.Second,
-	}
-	go t.scan()
-	return t
-}
-
-func (t *SlowMatchesTracker) Close() {
-	close(t.stop)
-	t.jobs.Wait()
-}
-
-func (t *SlowMatchesTracker) AddMatch(rq *adblock.Request) {
-	t.lock.Lock()
-	defer t.lock.Unlock()
-	t.running[rq] = time.Now().Add(t.maxDuration)
-}
-
-func (t *SlowMatchesTracker) RemoveMatch(rq *adblock.Request) {
-	t.lock.Lock()
-	defer t.lock.Unlock()
-	now := time.Now()
-	deadline, ok := t.running[rq]
-	if ok && now.After(deadline) {
-		t.abort(now, deadline, rq)
-	}
-	delete(t.running, rq)
-}
-
-func (t *SlowMatchesTracker) Match(rules *adblock.RuleMatcher, rq *adblock.Request) (
-	bool, int) {
-
-	t.AddMatch(rq)
-	defer t.RemoveMatch(rq)
-	return rules.Match(rq)
-}
-
-func (t *SlowMatchesTracker) scanOnce() {
-	now := time.Now()
-	t.lock.Lock()
-	defer t.lock.Unlock()
-	removed := []*adblock.Request{}
-	for rq, deadline := range t.running {
-		if !now.After(deadline) {
-			continue
-		}
-		removed = append(removed, rq)
-	}
-	for _, rq := range removed {
-		deadline := t.running[rq]
-		delete(t.running, rq)
-		t.abort(now, deadline, rq)
-	}
-}
-
-func (t *SlowMatchesTracker) abort(now, deadline time.Time, rq *adblock.Request) {
-	d := float64(now.Sub(deadline)+t.maxDuration) / float64(time.Second)
-	log.Fatalf("warning: request took at least %.2fs: %+v", d, *rq)
-}
-
-func (t *SlowMatchesTracker) scan() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-t.stop:
-			return
-		case <-ticker.C:
-			t.scanOnce()
-		}
-	}
-}
-
 type ProxyState struct {
 	Duration time.Duration
 	URL      string
 }
 
 type FilteringHandler struct {
-	Cache   *RuleCache
-	Tracker *SlowMatchesTracker
+	Cache        *RuleCache
+	MatchTimeout time.Duration
 }
 
 func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
@@ -169,10 +84,15 @@ func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
 		URL:          r.URL.String(),
 		Domain:       host,
 		OriginDomain: getReferrerDomain(r),
+		Timeout:      h.MatchTimeout,
 	}
 	rules := h.Cache.Rules()
 	start := time.Now()
-	matched, id := h.Tracker.Match(rules.Matcher, rq)
+	matched, id, err := rules.Matcher.Match(rq)
+	if err != nil {
+		log.Printf("error: matching %s with domain=%s, origin=%, failed: %s",
+			rq.URL, rq.Domain, rq.OriginDomain, err)
+	}
 	end := time.Now()
 	duration := end.Sub(start) / time.Millisecond
 	if matched {
@@ -215,11 +135,16 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 			Domain:       host,
 			OriginDomain: getReferrerDomain(ctx.Req),
 			ContentType:  mediaType,
+			Timeout:      h.MatchTimeout,
 		}
 		// Second level filtering, based on returned content
 		rules := h.Cache.Rules()
 		start := time.Now()
-		matched, id := h.Tracker.Match(rules.Matcher, rq)
+		matched, id, err := rules.Matcher.Match(rq)
+		if err != nil {
+			log.Printf("error: matching %s with domain=%s, origin=%, content-type: %s, "+
+				"failed: %s", rq.URL, rq.Domain, rq.OriginDomain, rq.ContentType, err)
+		}
 		end := time.Now()
 		duration2 = end.Sub(start) / time.Millisecond
 		if matched {
@@ -428,6 +353,10 @@ func runProxy() error {
 	if err != nil {
 		return fmt.Errorf("could not parse timeout %s: %s", *timeoutStr, err)
 	}
+	matchTimeout, err := time.ParseDuration(*matchTimeoutStr)
+	if err != nil {
+		return fmt.Errorf("could not parse matching timeout %s: %s", *matchTimeoutStr, err)
+	}
 	if *caCert == "" || *caKey == "" {
 		return fmt.Errorf("CA certificate and key must be specified")
 	}
@@ -448,11 +377,9 @@ func runProxy() error {
 	if err != nil {
 		return err
 	}
-	tracker := NewSlowMatchesTracker()
-	defer tracker.Close()
 	h := &FilteringHandler{
-		Cache:   cache,
-		Tracker: tracker,
+		Cache:        cache,
+		MatchTimeout: matchTimeout,
 	}
 
 	if *httpDebug != "" {

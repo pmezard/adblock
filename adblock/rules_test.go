@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/url"
 	"testing"
+	"time"
 )
 
 type TestInput struct {
@@ -34,8 +35,10 @@ func testInputs(t *testing.T, rules string, tests []TestInput) {
 		if u, err := url.Parse(test.URL); err == nil {
 			rq.Domain = u.Host
 		}
-		matched, _ := m.Match(&rq)
-		if matched && !test.Matched {
+		matched, _, err := m.Match(&rq)
+		if err != nil {
+			t.Errorf("unexpected match error: %s", err)
+		} else if matched && !test.Matched {
 			t.Errorf("unexpected match: '%+v'", test)
 		} else if !matched && test.Matched {
 			t.Errorf("unexpected miss: '%+v'", test)
@@ -176,7 +179,6 @@ func TestOptsThirdParty(t *testing.T) {
 		})
 }
 
-/*
 func TestInterruptedMatching(t *testing.T) {
 	m, added, err := NewMatcherFromFiles(
 		"testdata/too_many_wildcards.txt",
@@ -192,10 +194,13 @@ func TestInterruptedMatching(t *testing.T) {
 		Domain:       "www.ultimedia.com",
 		ContentType:  "application/javascript",
 		OriginDomain: "mobile.lemonde.fr",
+		Timeout:      200 * time.Millisecond,
 	}
-	m.Match(&rq)
+	ok, _, err := m.Match(&rq)
+	if ok || err == nil {
+		t.Fatalf("matcher successfully applied horrible rule, please change the test")
+	}
 }
-*/
 
 func BenchmarkSlowMatching(b *testing.B) {
 	m, added, err := NewMatcherFromFiles("testdata/easylist-20141019.txt")

@@ -30,9 +30,13 @@ func match() error {
 		Domain:       *domain,
 		OriginDomain: *originDomain,
 		ContentType:  *contentType,
+		Timeout:      5 * time.Second,
 	}
 	start := time.Now()
-	matched, _ := m.Match(rq)
+	matched, _, err := m.Match(rq)
+	if err != nil {
+		return err
+	}
 	end := time.Now()
 	suffix := fmt.Sprintf("in %.2fs", float64(end.Sub(start))/float64(time.Second))
 	if matched {
