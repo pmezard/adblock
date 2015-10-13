@@ -3,7 +3,6 @@ package adblock
 import (
 	"bytes"
 	"net/url"
-	"os"
 	"testing"
 )
 
@@ -12,27 +11,6 @@ type TestInput struct {
 	Matched      bool
 	ContentType  string
 	OriginDomain string
-}
-
-func loadMatcher(path string) (*RuleMatcher, int, error) {
-	fp, err := os.Open(path)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer fp.Close()
-	parsed, err := ParseRules(fp)
-	if err != nil {
-		return nil, 0, err
-	}
-	m := NewMatcher()
-	added := 0
-	for _, rule := range parsed {
-		err := m.AddRule(rule, 0)
-		if err == nil {
-			added += 1
-		}
-	}
-	return m, added, nil
 }
 
 func testInputs(t *testing.T, rules string, tests []TestInput) {
@@ -198,8 +176,29 @@ func TestOptsThirdParty(t *testing.T) {
 		})
 }
 
+/*
+func TestInterruptedMatching(t *testing.T) {
+	m, added, err := NewMatcherFromFiles(
+		"testdata/too_many_wildcards.txt",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added == 0 {
+		t.Fatalf("not enough rules loaded: %d", added)
+	}
+	rq := Request{
+		URL:          "http://www.ultimedia.com/api/widget/smart?j=new&t=1444644802198&otherplayer=0&exclude=&meta_description=Le%20Monde.fr%20version%20mobile%20-%20L%E2%80%99attentat%20de%20samedi%20dans%20la%20capitale%20turque%2C%20qui%20a%20fait%20au%20moins%2097%20morts%2C%20met%20au%20jour%20le%20jeu%20dangereux%20du%20pouvoir%2C%20%C3%A0%20trois%20semaines%20des%20l%C3%A9gislatives.&meta_ogtitle=Apr%C3%A8s%20l%E2%80%99attentat%20d%E2%80%99Ankara%2C%20la%20Turquie%20au%20bord%20du%20gouffre&meta_ogdescription=Le%20Monde.fr%20version%20mobile%20-%20L%E2%80%99attentat%20de%20samedi%20dans%20la%20capitale%20turque%2C%20qui%20a%20fait%20au%20moins%2097%20morts%2C%20met%20au%20jour%20le%20jeu%20dangereux%20du%20pouvoir%2C%20%C3%A0%20trois%20semaines%20des%20l%C3%A9gislatives.&meta_title=Apr%C3%A8s%20l%E2%80%99attentat%20d%E2%80%99Ankara%2C%20la%20Turquie%20au%20bord%20du%20gouffre&meta_h1=Apr%C3%A8s%20l%E2%80%99attentat%20d%E2%80%99Ankara%2C%20la%20Turquie%20au%20bord%20du%20gouffre&meta_h2=Depuis%20que%20les%20%C3%A9lecteurs%20turcs%20ont%20refus%C3%A9%20de%20%3Ca%20target%3D%22_blank%22%20onclick%3D%22return%20false%3B%22%20class%3D%22lien_interne%20conjug%22%20href%3D%22http%3A%2F%2Fconjugaison.lemonde.fr%2Fconjugaison%2Fpremier-groupe%2Fdonner%2F%22%20title%3D%22Conjugaison%20du%20verbe%20donner%22%3Edonner%3C%2Fa%3E%2C%20le%207%26nbsp%3Bjuin%2C%20la%20&meta_datepublished=2015-10-12T10%3A34%3A43%2B02%3A00&date=20151012&url=http%3A%2F%2Fmobile.lemonde.fr%2Feurope%2Farticle%2F2015%2F10%2F12%2Fapres-l-attentat-d-ankara-la-turquie-au-bord-du-gouffre_4787525_3214.html&mdtk=01194867&layout=&target=ultimedia_wrapper",
+		Domain:       "www.ultimedia.com",
+		ContentType:  "application/javascript",
+		OriginDomain: "mobile.lemonde.fr",
+	}
+	m.Match(&rq)
+}
+*/
+
 func BenchmarkSlowMatching(b *testing.B) {
-	m, added, err := loadMatcher("testdata/easylist-20141019.txt")
+	m, added, err := NewMatcherFromFiles("testdata/easylist-20141019.txt")
 	if err != nil {
 		b.Fatal(err)
 	}

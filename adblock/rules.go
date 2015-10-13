@@ -40,6 +40,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -788,4 +789,37 @@ func (m *RuleMatcher) String() string {
 	return fmt.Sprintf("includes:\n%s\nexcludes:\n%s\n"+
 		"content-includes:\n%s\ncontent-excludes:\n%s\n",
 		m.includes, m.excludes, m.contentIncludes, m.contentExcludes)
+}
+
+func loadRulesFromFile(m *RuleMatcher, path string) (int, error) {
+	fp, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer fp.Close()
+	parsed, err := ParseRules(fp)
+	if err != nil {
+		return 0, err
+	}
+	added := 0
+	for _, rule := range parsed {
+		err := m.AddRule(rule, 0)
+		if err == nil {
+			added += 1
+		}
+	}
+	return added, nil
+}
+
+func NewMatcherFromFiles(paths ...string) (*RuleMatcher, int, error) {
+	added := 0
+	m := NewMatcher()
+	for _, path := range paths {
+		n, err := loadRulesFromFile(m, path)
+		if err != nil {
+			return nil, 0, err
+		}
+		added += n
+	}
+	return m, added, nil
 }
