@@ -156,7 +156,7 @@ func (c *RuleCache) load(url string, refresh bool) (io.ReadCloser, time.Time, er
 // Add the rules in supplied reader to the matcher. Returns the list of added
 // rules (for debugging or tracing purposes) and the total number of read rules.
 // Some rules could not have been parsed.
-func buildOne(r io.Reader, matcher *adblock.RuleMatcher) ([]string, int, error) {
+func buildOne(id int, r io.Reader, matcher *adblock.RuleMatcher) ([]string, int, error) {
 	read := 0
 	rules := []string{}
 	scanner := bufio.NewScanner(r)
@@ -171,8 +171,9 @@ func buildOne(r io.Reader, matcher *adblock.RuleMatcher) ([]string, int, error) 
 		if rule == nil {
 			continue
 		}
-		err = matcher.AddRule(rule, len(rules))
-		read += 1
+		err = matcher.AddRule(rule, id)
+		id++
+		read++
 		if err == nil {
 			rules = append(rules, s)
 		}
@@ -183,6 +184,7 @@ func buildOne(r io.Reader, matcher *adblock.RuleMatcher) ([]string, int, error) 
 func (c *RuleCache) buildAll(refresh bool) (*RuleSet, time.Time, error) {
 	matcher := adblock.NewMatcher()
 	rules := []string{}
+	id := 0
 	read := 0
 	oldest := time.Time{}
 	for _, url := range c.urls {
@@ -194,13 +196,14 @@ func (c *RuleCache) buildAll(refresh bool) (*RuleSet, time.Time, error) {
 			oldest = date
 		}
 		log.Printf("building rules from %s", url)
-		built, n, err := buildOne(r, matcher)
+		built, n, err := buildOne(id, r, matcher)
 		r.Close()
 		if err != nil {
 			return nil, oldest, err
 		}
 		rules = append(rules, built...)
 		read += n
+		id += len(built)
 	}
 	log.Printf("blacklists built: %d / %d added\n", len(rules), read)
 	return &RuleSet{
