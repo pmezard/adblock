@@ -96,9 +96,11 @@ func (h *FilteringHandler) OnRequest(r *http.Request, ctx *goproxy.ProxyCtx) (
 	end := time.Now()
 	duration := end.Sub(start) / time.Millisecond
 	if matched {
-		rule := rules.Rules[id]
 		log.Printf("rejected in %dms: %s\n", duration, r.URL.String())
-		log.Printf("  by %s\n", rule)
+		if id >= 0 {
+			rule := rules.Rules[id]
+			log.Printf("  by %s\n", rule)
+		}
 		return r, goproxy.NewResponse(r, goproxy.ContentTypeText,
 			http.StatusNotFound, "Not Found")
 	}
@@ -149,10 +151,12 @@ func (h *FilteringHandler) OnResponse(r *http.Response,
 		duration2 = end.Sub(start) / time.Millisecond
 		if matched {
 			r.Body.Close()
-			rule := rules.Rules[id]
 			log.Printf("rejected in %d/%dms: %s\n", state.Duration, duration2,
 				state.URL)
-			log.Printf("  by %s\n", rule)
+			if id >= 0 {
+				rule := rules.Rules[id]
+				log.Printf("  by %s\n", rule)
+			}
 			return goproxy.NewResponse(ctx.Req, goproxy.ContentTypeText,
 				http.StatusNotFound, "Not Found")
 		}

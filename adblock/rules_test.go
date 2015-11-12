@@ -14,17 +14,26 @@ type TestInput struct {
 	OriginDomain string
 }
 
-func testInputs(t *testing.T, rules string, tests []TestInput) {
+func testInputsMode(t *testing.T, rules string, useRegexp bool, tests []TestInput) {
 	parsed, err := ParseRules(bytes.NewBufferString(rules))
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := NewMatcher()
+	nonOpts := []*Rule{}
 	for _, rule := range parsed {
+		if useRegexp && !rule.HasOpts() {
+			nonOpts = append(nonOpts, rule)
+			continue
+		}
 		err = m.AddRule(rule, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	err = m.SetOptionlessRules(nonOpts)
+	if err != nil {
+		t.Fatal(err)
 	}
 	for _, test := range tests {
 		rq := Request{
@@ -37,13 +46,18 @@ func testInputs(t *testing.T, rules string, tests []TestInput) {
 		}
 		matched, _, err := m.Match(&rq)
 		if err != nil {
-			t.Errorf("unexpected match error: %s", err)
+			t.Errorf("unexpected match error: %s, regexp: %v", err, useRegexp)
 		} else if matched && !test.Matched {
-			t.Errorf("unexpected match: '%+v'", test)
+			t.Errorf("unexpected match: '%+v', regexp: %v", test, useRegexp)
 		} else if !matched && test.Matched {
-			t.Errorf("unexpected miss: '%+v'", test)
+			t.Errorf("unexpected miss: '%+v', regexp: %v", test, useRegexp)
 		}
 	}
+}
+
+func testInputs(t *testing.T, rules string, tests []TestInput) {
+	testInputsMode(t, rules, false, tests)
+	testInputsMode(t, rules, true, tests)
 }
 
 func TestEmptyMatcher(t *testing.T) {
@@ -121,7 +135,7 @@ b|
 
 func TestDomainAnchor(t *testing.T) {
 	testInputs(t, `
-||ads.example.com
+||ads.example.com^
 ||foo.com/baz.gif
 `,
 		[]TestInput{

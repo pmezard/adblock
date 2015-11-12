@@ -156,10 +156,13 @@ func (c *RuleCache) load(url string, refresh bool) (io.ReadCloser, time.Time, er
 // Add the rules in supplied reader to the matcher. Returns the list of added
 // rules (for debugging or tracing purposes) and the total number of read rules.
 // Some rules could not have been parsed.
-func buildOne(r io.Reader, matcher *adblock.RuleMatcher) ([]string, int, error) {
+func buildOne(r io.Reader, matcher *adblock.RuleMatcher) (
+	[]string, []*adblock.Rule, int, error) {
+
 	read := 0
 	rules := []string{}
 	scanner := bufio.NewScanner(r)
+	nonOpts := []*adblock.Rule{}
 	for scanner.Scan() {
 		s := scanner.Text()
 		rule, err := adblock.ParseRule(s)
@@ -171,13 +174,17 @@ func buildOne(r io.Reader, matcher *adblock.RuleMatcher) ([]string, int, error) 
 		if rule == nil {
 			continue
 		}
-		err = matcher.AddRule(rule, len(rules))
 		read += 1
+		if !rule.HasOpts() {
+			nonOpts = append(nonOpts, rule)
+			continue
+		}
+		err = matcher.AddRule(rule, len(rules))
 		if err == nil {
 			rules = append(rules, s)
 		}
 	}
-	return rules, read, scanner.Err()
+	return rules, nonOpts, read, scanner.Err()
 }
 
 func (c *RuleCache) buildAll(refresh bool) (*RuleSet, time.Time, error) {
@@ -185,6 +192,7 @@ func (c *RuleCache) buildAll(refresh bool) (*RuleSet, time.Time, error) {
 	rules := []string{}
 	read := 0
 	oldest := time.Time{}
+	nonOpts := []*adblock.Rule{}
 	for _, url := range c.urls {
 		r, date, err := c.load(url, refresh)
 		if err != nil {
@@ -194,15 +202,21 @@ func (c *RuleCache) buildAll(refresh bool) (*RuleSet, time.Time, error) {
 			oldest = date
 		}
 		log.Printf("building rules from %s", url)
-		built, n, err := buildOne(r, matcher)
+		built, optionless, n, err := buildOne(r, matcher)
 		r.Close()
 		if err != nil {
 			return nil, oldest, err
 		}
 		rules = append(rules, built...)
 		read += n
+		nonOpts = append(nonOpts, optionless...)
 	}
-	log.Printf("blacklists built: %d / %d added\n", len(rules), read)
+	err := matcher.SetOptionlessRules(nonOpts)
+	if err != nil {
+		return nil, oldest, err
+	}
+	log.Printf("blacklists built: %d (regexp: %d) / %d added\n",
+		len(rules)+len(nonOpts), len(nonOpts), read)
 	return &RuleSet{
 		Rules:   rules,
 		Matcher: matcher,

@@ -185,6 +185,20 @@ var (
 	NullOpts = RuleOpts{}
 )
 
+// HasOpts returns true if the rule contains supported or unsupported options.
+func (r *Rule) HasOpts() bool {
+	return r.Opts.Document ||
+		len(r.Opts.Domains) > 0 || // handled
+		r.Opts.Font != nil || //handled
+		r.Opts.Image != nil || // handled
+		r.Opts.Media != nil ||
+		r.Opts.Object != nil || // handled
+		r.Opts.Popup != nil ||
+		r.Opts.Script != nil || // handled
+		r.Opts.Stylesheet != nil || // handled
+		r.Opts.ThirdParty != nil // handled
+}
+
 func (r *Rule) HasUnsupportedOpts() bool {
 	// Collapse is related to ElemHide, and irrelevant
 	return r.Opts.Document ||
@@ -839,8 +853,10 @@ func (t *ruleTree) String() string {
 // RuleMatcher implements a complete set of include and exclude AdblockPlus
 // rules.
 type RuleMatcher struct {
-	includes *ruleTree
-	excludes *ruleTree
+	reIncludes *regexp.Regexp
+	reExcludes *regexp.Regexp
+	includes   *ruleTree
+	excludes   *ruleTree
 	// Rules requiring resource content type
 	contentIncludes *ruleTree
 	contentExcludes *ruleTree
@@ -876,8 +892,38 @@ func (m *RuleMatcher) AddRule(rule *Rule, ruleId int) error {
 	return tree.AddRule(rule, ruleId)
 }
 
+// SetOptionlessRules takes a set of rules without options and builds a filter
+// using regular expressions which is faster than the regular filter. To use
+// this optimization, group the rules without options and call this method and
+// call AddRule on the others. Note the regular expression filter cannot track
+// which rule matched.
+func (m *RuleMatcher) SetOptionlessRules(rules []*Rule) error {
+	includes := []*Rule{}
+	excludes := []*Rule{}
+	for _, r := range rules {
+		if r.Exception {
+			excludes = append(excludes, r)
+		} else {
+			includes = append(includes, r)
+		}
+	}
+	reIncludes, err := rulesToRegexp(includes)
+	if err != nil {
+		return err
+	}
+	reExcludes, err := rulesToRegexp(excludes)
+	if err != nil {
+		return err
+	}
+	m.reIncludes = reIncludes
+	m.reExcludes = reExcludes
+	return nil
+}
+
 // Match applies include and exclude rules on supplied request. If the
-// request is accepted, it returns true and the matching rule identifier.
+// request is accepted, it returns true and the matching rule identifier. If
+// the request is matched by a regular expression filter, returned identifier
+// is -1.
 func (m *RuleMatcher) Match(rq *Request) (bool, int, error) {
 	inc := m.includes
 	exc := m.excludes
@@ -885,9 +931,17 @@ func (m *RuleMatcher) Match(rq *Request) (bool, int, error) {
 		inc = m.contentIncludes
 		exc = m.contentExcludes
 	}
-	id, opts, err := inc.Match(rq)
-	if opts == nil || err != nil {
-		return false, 0, err
+	var err error
+	var opts []*RuleOpts
+	id := -1
+	if m.reIncludes == nil || !m.reIncludes.MatchString(rq.URL) {
+		id, opts, err = inc.Match(rq)
+		if opts == nil || err != nil {
+			return false, 0, err
+		}
+	}
+	if m.reExcludes != nil && m.reExcludes.MatchString(rq.URL) {
+		return false, 0, nil
 	}
 	_, opts, err = exc.Match(rq)
 	return opts == nil, id, err
@@ -901,35 +955,39 @@ func (m *RuleMatcher) String() string {
 		m.includes, m.excludes, m.contentIncludes, m.contentExcludes)
 }
 
-func loadRulesFromFile(m *RuleMatcher, path string) (int, error) {
+func loadRulesFromFile(m *RuleMatcher, path string) ([]*Rule, error) {
 	fp, err := os.Open(path)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer fp.Close()
-	parsed, err := ParseRules(fp)
-	if err != nil {
-		return 0, err
-	}
-	added := 0
-	for _, rule := range parsed {
-		err := m.AddRule(rule, 0)
-		if err == nil {
-			added += 1
-		}
-	}
-	return added, nil
+	return ParseRules(fp)
 }
 
 func NewMatcherFromFiles(paths ...string) (*RuleMatcher, int, error) {
 	added := 0
 	m := NewMatcher()
+	nonOpts := []*Rule{}
 	for _, path := range paths {
-		n, err := loadRulesFromFile(m, path)
+		rules, err := loadRulesFromFile(m, path)
 		if err != nil {
 			return nil, 0, err
 		}
-		added += n
+		for _, rule := range rules {
+			if !rule.HasOpts() {
+				nonOpts = append(nonOpts, rule)
+				continue
+			}
+			err := m.AddRule(rule, 0)
+			if err == nil {
+				added += 1
+			}
+		}
 	}
+	err := m.SetOptionlessRules(nonOpts)
+	if err != nil {
+		return nil, 0, err
+	}
+	added += len(nonOpts)
 	return m, added, nil
 }
