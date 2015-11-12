@@ -100,6 +100,7 @@ type RuleOpts struct {
 	Domains          []string
 	ElemHide         bool
 	Font             *bool
+	GenericHide      bool
 	Image            *bool
 	Media            *bool
 	Object           *bool
@@ -143,6 +144,8 @@ func NewRuleOpts(s string) (RuleOpts, error) {
 			opts.Document = true
 		case opt == "elemhide":
 			opts.ElemHide = true
+		case opt == "generichide":
+			opts.GenericHide = true
 		case opt == "third-party":
 			opts.ThirdParty = &value
 		case strings.HasPrefix(opt, "domain="):
@@ -190,6 +193,7 @@ func (r *Rule) HasUnsupportedOpts() bool {
 	return r.Opts.Document ||
 		// len(r.Opts.Domains) > 0 // handled
 		// r.Opts.ElemHide // irrelevant
+		// r.Opts.GenericHide // irrelevant
 		// r.Opts.Image != nil || // handled
 		r.Opts.Media != nil ||
 		// r.Opts.Object != nil || // handled
