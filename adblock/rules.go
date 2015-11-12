@@ -185,7 +185,7 @@ var (
 	NullOpts = RuleOpts{}
 )
 
-func (r *Rule) HasOpts() bool {
+func (r *Rule) HasUnsupportedOpts() bool {
 	// Collapse is related to ElemHide, and irrelevant
 	return r.Opts.Document ||
 		// len(r.Opts.Domains) > 0 // handled
@@ -788,7 +788,7 @@ func replaceWildcardWithSubstring(parts []RulePart) []RulePart {
 
 // AddRule add a rule and its identifier to the rule tree.
 func (t *ruleTree) AddRule(rule *Rule, ruleId int) error {
-	if rule.HasOpts() {
+	if rule.HasUnsupportedOpts() {
 		return fmt.Errorf("rule options are not supported")
 	}
 	rewritten, err := rewriteDomainAnchors(rule.Parts)
