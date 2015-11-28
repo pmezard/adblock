@@ -100,6 +100,7 @@ type RuleOpts struct {
 	Domains          []string
 	ElemHide         bool
 	Font             *bool
+	GenericBlock     bool
 	GenericHide      bool
 	Image            *bool
 	Media            *bool
@@ -144,6 +145,8 @@ func NewRuleOpts(s string) (RuleOpts, error) {
 			opts.Document = true
 		case opt == "elemhide":
 			opts.ElemHide = true
+		case opt == "genericblock":
+			opts.GenericBlock = true
 		case opt == "generichide":
 			opts.GenericHide = true
 		case opt == "third-party":
@@ -308,6 +311,15 @@ type Request struct {
 	// Timeout is the maximum amount of time a single matching can take.
 	Timeout   time.Duration
 	CheckFreq int
+
+	// GenericBlock is true if rules not matching a specific domain are to be
+	// ignored. If nil, the matcher will determine it internally based on
+	// $genericblock options.
+	GenericBlock *bool
+}
+
+func (rq *Request) HasGenericBlock() bool {
+	return rq.GenericBlock != nil && *rq.GenericBlock
 }
 
 // RuleNode is the node structure of rule trees.
@@ -444,11 +456,13 @@ func matchOptsThirdParty(opts *RuleOpts, origin, domain string) bool {
 // duration is updated to the original duration plus the time exceeding the
 // deadline.
 type matchContext struct {
-	counter  int
-	freq     int
-	duration time.Duration
-	deadline time.Time
-	location *ruleNode
+	counter      int
+	freq         int
+	duration     time.Duration
+	deadline     time.Time
+	location     *ruleNode
+	genericBlock bool
+	isDomainRule int
 }
 
 func (ctx *matchContext) Continue(n *ruleNode) bool {
@@ -476,7 +490,9 @@ func (n *ruleNode) matchChildren(ctx *matchContext, url []byte, rq *Request) (
 		return -1, nil
 	}
 	if len(url) == 0 && len(n.Children) == 0 {
+		domains := 0
 		for _, opt := range n.Opts {
+			domains += len(opt.Domains)
 			if !matchOptsDomains(opt, rq.Domain) {
 				return 0, nil
 			}
@@ -486,6 +502,10 @@ func (n *ruleNode) matchChildren(ctx *matchContext, url []byte, rq *Request) (
 			if !matchOptsThirdParty(opt, rq.OriginDomain, rq.Domain) {
 				return 0, nil
 			}
+		}
+		if ctx.genericBlock && ctx.isDomainRule == 0 && domains == 0 {
+			// genericblock only applies rules with specific domains
+			return 0, nil
 		}
 		return n.RuleId, n.Opts
 	}
@@ -587,7 +607,10 @@ func (n *ruleNode) dispatch(ctx *matchContext, url []byte, rq *Request) (
 		case DomainAnchor:
 			remaining, ok := matchDomainAnchor(url, n.Value)
 			if ok {
-				return n.matchChildren(ctx, remaining, rq)
+				ctx.isDomainRule += 1
+				ruleId, opts := n.matchChildren(ctx, remaining, rq)
+				ctx.isDomainRule -= 1
+				return ruleId, opts
 			}
 		case Root:
 			return n.matchChildren(ctx, url, rq)
@@ -644,8 +667,9 @@ func (e *InterruptedError) Error() string {
 // If the request timeout is set and exceeded, InterruptedError is returned.
 func (n *ruleNode) Match(url []byte, rq *Request) (int, []*RuleOpts, error) {
 	ctx := &matchContext{
-		freq:     rq.CheckFreq,
-		duration: rq.Timeout,
+		freq:         rq.CheckFreq,
+		duration:     rq.Timeout,
+		genericBlock: rq.HasGenericBlock(),
 	}
 	if rq.Timeout > 0 {
 		ctx.deadline = time.Now().Add(rq.Timeout)
@@ -848,6 +872,8 @@ type RuleMatcher struct {
 	// Rules requiring resource content type
 	contentIncludes *ruleTree
 	contentExcludes *ruleTree
+	// Match domains not matching generic rules
+	genericBlock *ruleTree
 }
 
 // NewMatcher returns a new empty matcher.
@@ -857,6 +883,7 @@ func NewMatcher() *RuleMatcher {
 		excludes:        newRuleTree(),
 		contentIncludes: newRuleTree(),
 		contentExcludes: newRuleTree(),
+		genericBlock:    newRuleTree(),
 	}
 }
 
@@ -864,6 +891,12 @@ func NewMatcher() *RuleMatcher {
 // returned by Match().
 func (m *RuleMatcher) AddRule(rule *Rule, ruleId int) error {
 	var tree *ruleTree
+	if rule.Opts.GenericBlock {
+		if !rule.Exception {
+			return fmt.Errorf("$genericblock applies only on exclude rules: %s", rule.Raw)
+		}
+		return m.genericBlock.AddRule(rule, ruleId)
+	}
 	if rule.HasContentOpts() {
 		if rule.Exception {
 			tree = m.contentExcludes
@@ -883,6 +916,20 @@ func (m *RuleMatcher) AddRule(rule *Rule, ruleId int) error {
 // Match applies include and exclude rules on supplied request. If the
 // request is accepted, it returns true and the matching rule identifier.
 func (m *RuleMatcher) Match(rq *Request) (bool, int, error) {
+	copied := false
+	if rq.GenericBlock == nil {
+		_, opts, err := m.genericBlock.Match(rq)
+		if err != nil {
+			return false, 0, err
+		}
+		if opts != nil {
+			// Do not mutate caller structures
+			copied = true
+			genericBlock := true
+			rq = &(*rq)
+			rq.GenericBlock = &genericBlock
+		}
+	}
 	inc := m.includes
 	exc := m.excludes
 	if len(rq.ContentType) > 0 {
@@ -892,6 +939,11 @@ func (m *RuleMatcher) Match(rq *Request) (bool, int, error) {
 	id, opts, err := inc.Match(rq)
 	if opts == nil || err != nil {
 		return false, 0, err
+	}
+	if copied {
+		// Exclude rules ignore the genericBlock bit, unless explicitely set by
+		// the caller
+		rq.GenericBlock = nil
 	}
 	_, opts, err = exc.Match(rq)
 	return opts == nil, id, err

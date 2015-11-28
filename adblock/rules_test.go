@@ -179,6 +179,53 @@ func TestOptsThirdParty(t *testing.T) {
 		})
 }
 
+func TestGenericBlock(t *testing.T) {
+	testInputs(t, `
+?match$domain=foo.biz
+/ads
+/ads1$domain=foo.com
+/ads2$domain=bar.com
+||foo.org^
+||bar.org^
+@@||foo.com^$genericblock
+@@||foo.org^$genericblock
+@@||foo.biz^$genericblock
+@@/reject
+`,
+		[]TestInput{
+			// Generic match
+			{URL: "http://foo.com/ads", Matched: false},
+			{URL: "http://bar.com/ads", Matched: true},
+			// Domain specific match
+			{URL: "http://foo.com/ads1", Matched: true},
+			{URL: "http://bar.com/ads2", Matched: true},
+			{URL: "http://foo.org/ads3", Matched: true},
+			{URL: "http://bar.org/ads3", Matched: true},
+			// Exclude rules ignore genericblock bit
+			{URL: "http://foo.biz/reject?match", Matched: false},
+		})
+}
+
+func testInvalidRules(t *testing.T, rules string) {
+	parsed, err := ParseRules(bytes.NewBufferString(rules))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewMatcher()
+	for _, rule := range parsed {
+		err = m.AddRule(rule, 0)
+		if err != nil {
+			return
+		}
+	}
+	t.Fatalf("unexpected valid rules: %s", rules)
+}
+
+func TestInvalidRules(t *testing.T) {
+	// $genericblock applies only on exclude rules
+	testInvalidRules(t, "||foo.biz^$genericblock")
+}
+
 func TestInterruptedMatching(t *testing.T) {
 	m, added, err := NewMatcherFromFiles(
 		"testdata/too_many_wildcards.txt",
