@@ -267,3 +267,16 @@ func BenchmarkSlowMatching(b *testing.B) {
 		m.Match(&rq)
 	}
 }
+
+func TestParseRule(t *testing.T) {
+	// Mostly test we can parse rules with unused features
+	rules := []string{
+		"||bing.com/fd/ls/$~ping",
+	}
+	for _, rule := range rules {
+		_, err := ParseRule(rule)
+		if err != nil {
+			t.Fatalf("failed to parse rule: %s: %s", rule, err)
+		}
+	}
+}

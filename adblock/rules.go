@@ -107,6 +107,7 @@ type RuleOpts struct {
 	Object           *bool
 	ObjectSubRequest *bool
 	Other            *bool
+	Ping             *bool
 	Popup            *bool
 	Script           *bool
 	Stylesheet       *bool
@@ -157,6 +158,8 @@ func NewRuleOpts(s string) (RuleOpts, error) {
 				d = strings.TrimSpace(d)
 				opts.Domains = append(opts.Domains, d)
 			}
+		case opt == "ping":
+			opts.Ping = &value
 		// Undocumented options
 		case opt == "xmlhttprequest":
 			opts.XmlHttpRequest = &value
@@ -208,6 +211,7 @@ func (r *Rule) HasUnsupportedOpts() bool {
 	// r.Opts.SubDocument != nil || // cannot guess request source
 	// r.Opts.ThirdParty != nil // handled
 	// r.Opts.XmlHttpRequest != nil // cannot guess request source
+	// r.Opts.Ping // used for javascript pingback
 }
 
 func (r *Rule) HasContentOpts() bool {
