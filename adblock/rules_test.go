@@ -272,6 +272,7 @@ func TestParseRule(t *testing.T) {
 	// Mostly test we can parse rules with unused features
 	rules := []string{
 		"||bing.com/fd/ls/$~ping",
+		"||bing.com/fd/ls/$websocket",
 	}
 	for _, rule := range rules {
 		_, err := ParseRule(rule)
