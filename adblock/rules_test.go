@@ -137,14 +137,17 @@ func TestDomainAnchor(t *testing.T) {
 
 func TestOptsDomain(t *testing.T) {
 	testInputs(t, `
-/ads$domain=foo.com|~info.foo.com
+/ads$domain=foo.com
+/ads$domain=bar.com
+/ads$domain=~info.foo.com
 `,
 		[]TestInput{
-			{URL: "http://foo.com/ads", Matched: true},
-			{URL: "http://other.foo.com/ads", Matched: true},
-			{URL: "http://info.foo.com/ads", Matched: false},
-			{URL: "http://foo.com/img", Matched: false},
-			{URL: "http://other.com/ads", Matched: false},
+			{URL: "http://site.com/ads", Matched: true, OriginDomain: "foo.com"},
+			{URL: "http://site.com/ads", Matched: true, OriginDomain: "bar.com"},
+			{URL: "http://site.com/ads", Matched: true, OriginDomain: "other.foo.com"},
+			{URL: "http://site.com/ads", Matched: false, OriginDomain: "info.foo.com"},
+			{URL: "http://site.com/img", Matched: false, OriginDomain: "foo.com"},
+			{URL: "http://site.com/ads", Matched: false, OriginDomain: "other.com"},
 		})
 }
 
@@ -197,8 +200,8 @@ func TestGenericBlock(t *testing.T) {
 			{URL: "http://foo.com/ads", Matched: false},
 			{URL: "http://bar.com/ads", Matched: true},
 			// Domain specific match
-			{URL: "http://foo.com/ads1", Matched: true},
-			{URL: "http://bar.com/ads2", Matched: true},
+			{URL: "http://site.com/ads1", Matched: true, OriginDomain: "foo.com"},
+			{URL: "http://site.com/ads2", Matched: true, OriginDomain: "bar.com"},
 			{URL: "http://foo.org/ads3", Matched: true},
 			{URL: "http://bar.org/ads3", Matched: true},
 			// Exclude rules ignore genericblock bit

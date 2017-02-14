@@ -393,24 +393,30 @@ var (
 	reSeparator = regexp.MustCompile(`^(?:[^\w\d_\-\.%]|$)`)
 )
 
-func matchOptsDomains(opts *RuleOpts, domain string) bool {
-	if len(opts.Domains) == 0 {
-		return true
+func matchOptsDomains(opts []*RuleOpts, domain string) (int, bool) {
+	domains := 0
+	for _, opt := range opts {
+		domains += len(opt.Domains)
 	}
-	accept := false
-	for _, d := range opts.Domains {
-		reject := strings.HasPrefix(d, "~")
-		if reject {
-			d = d[1:]
+	matched := domains == 0
+	for _, opt := range opts {
+		if len(opt.Domains) == 0 {
+			continue
 		}
-		if domain == d || strings.HasSuffix(domain, "."+d) {
+		for _, d := range opt.Domains {
+			reject := strings.HasPrefix(d, "~")
 			if reject {
-				return false
+				d = d[1:]
 			}
-			accept = true
+			if domain == d || strings.HasSuffix(domain, "."+d) {
+				matched = true
+				if reject {
+					return domains, false
+				}
+			}
 		}
 	}
-	return accept
+	return domains, matched
 }
 
 func matchOptsContent(opts *RuleOpts, contentType string) bool {
@@ -497,12 +503,11 @@ func (n *ruleNode) matchChildren(ctx *matchContext, url []byte, rq *Request) (
 		return -1, nil
 	}
 	if len(url) == 0 && len(n.Children) == 0 {
-		domains := 0
+		domains, matchedDomains := matchOptsDomains(n.Opts, rq.OriginDomain)
+		if !matchedDomains {
+			return 0, nil
+		}
 		for _, opt := range n.Opts {
-			domains += len(opt.Domains)
-			if !matchOptsDomains(opt, rq.Domain) {
-				return 0, nil
-			}
 			if !matchOptsContent(opt, rq.ContentType) {
 				return 0, nil
 			}
