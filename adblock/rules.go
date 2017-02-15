@@ -490,6 +490,23 @@ func (ctx *matchContext) Continue(n *ruleNode) bool {
 	return !stop
 }
 
+func matchOpts(opt *RuleOpts, ctx *matchContext, rq *Request) bool {
+	if !matchOptsDomains(opt, rq.Domain) {
+		return false
+	}
+	if !matchOptsContent(opt, rq.ContentType) {
+		return false
+	}
+	if !matchOptsThirdParty(opt, rq.OriginDomain, rq.Domain) {
+		return false
+	}
+	if ctx.genericBlock && ctx.isDomainRule == 0 && len(opt.Domains) == 0 {
+		// genericblock only applies rules with specific domains
+		return false
+	}
+	return true
+}
+
 func (n *ruleNode) matchChildren(ctx *matchContext, url []byte, rq *Request) (
 	int, []*RuleOpts) {
 
@@ -497,24 +514,12 @@ func (n *ruleNode) matchChildren(ctx *matchContext, url []byte, rq *Request) (
 		return -1, nil
 	}
 	if len(url) == 0 && len(n.Children) == 0 {
-		domains := 0
 		for _, opt := range n.Opts {
-			domains += len(opt.Domains)
-			if !matchOptsDomains(opt, rq.Domain) {
-				return 0, nil
-			}
-			if !matchOptsContent(opt, rq.ContentType) {
-				return 0, nil
-			}
-			if !matchOptsThirdParty(opt, rq.OriginDomain, rq.Domain) {
-				return 0, nil
+			if matchOpts(opt, ctx, rq) {
+				return n.RuleId, n.Opts
 			}
 		}
-		if ctx.genericBlock && ctx.isDomainRule == 0 && domains == 0 {
-			// genericblock only applies rules with specific domains
-			return 0, nil
-		}
-		return n.RuleId, n.Opts
+		return 0, nil
 	}
 	// If there are children they have to match
 	for _, c := range n.Children {

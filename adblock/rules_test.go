@@ -138,6 +138,8 @@ func TestDomainAnchor(t *testing.T) {
 func TestOptsDomain(t *testing.T) {
 	testInputs(t, `
 /ads$domain=foo.com|~info.foo.com
+||bar.com^$domain=bar.com
+||bar.com^$domain=baz.com
 `,
 		[]TestInput{
 			{URL: "http://foo.com/ads", Matched: true},
@@ -145,6 +147,7 @@ func TestOptsDomain(t *testing.T) {
 			{URL: "http://info.foo.com/ads", Matched: false},
 			{URL: "http://foo.com/img", Matched: false},
 			{URL: "http://other.com/ads", Matched: false},
+			{URL: "http://bar.com/ads", Matched: true},
 		})
 }
 
