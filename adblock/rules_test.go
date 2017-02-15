@@ -142,12 +142,15 @@ func TestOptsDomain(t *testing.T) {
 ||bar.com^$domain=baz.com
 `,
 		[]TestInput{
-			{URL: "http://foo.com/ads", Matched: true},
-			{URL: "http://other.foo.com/ads", Matched: true},
-			{URL: "http://info.foo.com/ads", Matched: false},
-			{URL: "http://foo.com/img", Matched: false},
+			{URL: "http://foo.com/ads", Matched: true, OriginDomain: "foo.com"},
+			{URL: "http://foo.com/ads", Matched: false},
+			{URL: "http://other.foo.com/ads", Matched: true, OriginDomain: "other.foo.com"},
+			{URL: "http://info.foo.com/ads", Matched: false, OriginDomain: "info.foor.com"},
+			{URL: "http://foo.com/img", Matched: false, OriginDomain: "foo.com"},
 			{URL: "http://other.com/ads", Matched: false},
-			{URL: "http://bar.com/ads", Matched: true},
+			{URL: "http://bar.com/script", Matched: true, OriginDomain: "bar.com"},
+			{URL: "http://bar.com/script", Matched: true, OriginDomain: "baz.com"},
+			{URL: "http://bar.com/script", Matched: false, OriginDomain: "foo.com"},
 		})
 }
 
@@ -197,15 +200,15 @@ func TestGenericBlock(t *testing.T) {
 `,
 		[]TestInput{
 			// Generic match
-			{URL: "http://foo.com/ads", Matched: false},
-			{URL: "http://bar.com/ads", Matched: true},
+			{URL: "http://foo.com/ads", Matched: false, OriginDomain: "foo.com"},
+			{URL: "http://bar.com/ads", Matched: true, OriginDomain: "bar.com"},
 			// Domain specific match
-			{URL: "http://foo.com/ads1", Matched: true},
-			{URL: "http://bar.com/ads2", Matched: true},
-			{URL: "http://foo.org/ads3", Matched: true},
-			{URL: "http://bar.org/ads3", Matched: true},
+			{URL: "http://foo.com/ads1", Matched: true, OriginDomain: "foo.com"},
+			{URL: "http://bar.com/ads2", Matched: true, OriginDomain: "bar.com"},
+			{URL: "http://foo.org/ads3", Matched: true, OriginDomain: "foo.org"},
+			{URL: "http://bar.org/ads3", Matched: true, OriginDomain: "bar.org"},
 			// Exclude rules ignore genericblock bit
-			{URL: "http://foo.biz/reject?match", Matched: false},
+			{URL: "http://foo.biz/reject?match", Matched: false, OriginDomain: "foo.biz"},
 		})
 }
 

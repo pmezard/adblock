@@ -491,7 +491,7 @@ func (ctx *matchContext) Continue(n *ruleNode) bool {
 }
 
 func matchOpts(opt *RuleOpts, ctx *matchContext, rq *Request) bool {
-	if !matchOptsDomains(opt, rq.Domain) {
+	if !matchOptsDomains(opt, rq.OriginDomain) {
 		return false
 	}
 	if !matchOptsContent(opt, rq.ContentType) {
