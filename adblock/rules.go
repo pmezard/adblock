@@ -114,6 +114,7 @@ type RuleOpts struct {
 	SubDocument      *bool
 	ThirdParty       *bool
 	Websocket        *bool
+	WebRTC           *bool
 	XmlHttpRequest   *bool
 }
 
@@ -163,6 +164,8 @@ func NewRuleOpts(s string) (RuleOpts, error) {
 			opts.Ping = &value
 		case opt == "websocket":
 			opts.Websocket = &value
+		case opt == "webrtc":
+			opts.WebRTC = &value
 		// Undocumented options
 		case opt == "xmlhttprequest":
 			opts.XmlHttpRequest = &value
