@@ -236,7 +236,7 @@ func ParseRule(s string) (*Rule, error) {
 		// Empty or comment
 		return nil, nil
 	}
-	if strings.Contains(s, "##") {
+	if strings.Contains(s, "##") || strings.Contains(s, "#?#") {
 		// Element selectors are not supported
 		return nil, nil
 	}
